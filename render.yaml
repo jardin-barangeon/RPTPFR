@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: rptpfr-stats
+    runtime: python
+    plan: starter
+    buildCommand: "echo Installation sans dependances externes"
+    startCommand: "python server.py"
+    healthCheckPath: /health
+    envVars:
+      - key: TRUCKY_TOKEN
+        sync: false
+      - key: PYTHON_VERSION
+        value: 3.13.7
