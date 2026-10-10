@@ -1,4 +1,4 @@
-import json, os, urllib.request, urllib.error, datetime, http.server, socketserver, logging
+import json, os, urllib.request, urllib.error, datetime, http.server, socketserver
 import challenges
 from pathlib import Path
 ROOT=Path(__file__).parent
@@ -209,7 +209,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 with challenges.db() as conn:conn.execute('INSERT INTO challenges(title,description,transport,mode,target_km,start_date,end_date,active,discord_webhook) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',values)
                 # L'enregistrement reste valide même si Discord est temporairement indisponible.
                 sent, discord_message = challenges.announce_creation(values)
-                logging.info('RPTPFR annonce Discord : %s - %s', 'OK' if sent else 'ECHEC', discord_message)
                 return self.json_response(200, {'ok':True,'discord_sent':sent,'discord_message':discord_message})
             elif method=='PUT' and ident is not None:
                 values=challenges.validate(data)
@@ -224,6 +223,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/api/truckersmp/servers':
+            try:
+                request=urllib.request.Request('https://api.truckersmp.com/v2/servers',headers={'Accept':'application/json','User-Agent':'RPTPFR-Dashboard/1.0'})
+                with urllib.request.urlopen(request,timeout=12) as response:
+                    payload=json.load(response)
+                raw=payload.get('response',[]) if isinstance(payload,dict) else []
+                if not isinstance(raw,list):raise ValueError('Réponse TruckersMP inattendue')
+                servers=[]
+                for entry in raw:
+                    if not isinstance(entry,dict):continue
+                    game=str(entry.get('game','')).lower()
+                    if game and game not in ('ets2','eurotrucksimulator2','euro truck simulator 2'):continue
+                    servers.append({'name':str(entry.get('name','Serveur')),'online':bool(entry.get('online',False)),'players':int(entry.get('players') or 0),'maxplayers':int(entry.get('maxplayers') or 0),'queue':int(entry.get('queue') or 0)})
+                return self.json_response(200,{'servers':servers})
+            except Exception:
+                return self.json_response(502,{'error':'API TruckersMP indisponible temporairement'})
         if path=='/admin':
             body=challenges.ADMIN_HTML.encode('utf-8')
             self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
