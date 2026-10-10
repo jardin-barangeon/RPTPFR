@@ -206,11 +206,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             ident=int(match.group(1)) if match.group(1) else None
             if method=='POST' and ident is None:
                 values=challenges.validate(data)
-                with challenges.db() as conn:conn.execute('INSERT INTO challenges(title,description,transport,mode,target_km,start_date,end_date,active) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',values)
+                with challenges.db() as conn:conn.execute('INSERT INTO challenges(title,description,transport,mode,target_km,start_date,end_date,active,discord_webhook) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',values)
             elif method=='PUT' and ident is not None:
                 values=challenges.validate(data)
                 with challenges.db() as conn:
-                    cur=conn.execute('UPDATE challenges SET title=%s,description=%s,transport=%s,mode=%s,target_km=%s,start_date=%s,end_date=%s,active=%s WHERE id=%s',(*values,ident))
+                    cur=conn.execute('UPDATE challenges SET title=%s,description=%s,transport=%s,mode=%s,target_km=%s,start_date=%s,end_date=%s,active=%s,discord_webhook=%s WHERE id=%s',(*values,ident))
                     if cur.rowcount==0:return self.json_response(404,{'error':'Challenge introuvable'})
             elif method=='DELETE' and ident is not None:
                 with challenges.db() as conn:conn.execute('DELETE FROM challenges WHERE id=%s',(ident,))

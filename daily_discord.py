@@ -14,8 +14,7 @@ def main():
         return
     webhook=os.environ.get('DISCORD_WEBHOOK_URL','').strip()
     token=os.environ.get('TRUCKY_TOKEN','').strip()
-    if not webhook.startswith(('https://discord.com/api/webhooks/','https://discordapp.com/api/webhooks/')):
-        raise RuntimeError('DISCORD_WEBHOOK_URL manquant ou invalide')
+    # Le webhook global est facultatif si chaque challenge a le sien.
     if not token:raise RuntimeError('TRUCKY_TOKEN manquant')
     yesterday=(datetime.datetime.now(PARIS).date()-datetime.timedelta(days=1))
     day=yesterday.isoformat()
@@ -30,7 +29,7 @@ def main():
     active=[c for c in challenges.list_challenges() if c['active'] and c['start_date']<=yesterday<=c['end_date']]
     if not active:
         print('Aucun challenge actif pour',day);return
-    embeds=[]
+    deliveries={}
     for c in active:
         subset=[j for j in jobs if c['start_date'].isoformat()<=j.get('date','')[:10]<=day and (c['transport']=='all' or j.get('vehicle_type')==c['transport'])]
         today=[j for j in subset if j.get('date','')[:10]==day]
@@ -48,15 +47,20 @@ def main():
               f'**Aujourd’hui :** +{sum(daily.values()):,.0f} km • {len(daily)} chauffeur(s)\n'
               f'**Classement du jour :**\n{ranking}\n'
               f'**Restant :** {max(0,c["target_km"]-progress):,.0f} km')
-        embeds.append({'title':f'{icon} {c["title"][:180]}','description':desc[:4000], 'color':3447003,
-                       'footer':{'text':f'{c["mode"].capitalize()} • {c["transport"].upper()} • Trucky RPTPFR'}})
+        embed={'title':f'{icon} {c["title"][:180]}','description':desc[:4000], 'color':3447003,
+                       'footer':{'text':f'{c["mode"].capitalize()} • {c["transport"].upper()} • Trucky RPTPFR'}}
+        target=(c.get('discord_webhook') or webhook).strip()
+        if not target.startswith('https://discord.com/api/webhooks/'):
+            raise RuntimeError('Webhook Discord manquant pour le challenge '+c['title'])
+        deliveries.setdefault(target,[]).append(embed)
     # Discord limite les embeds par message à 10
-    for start in range(0,len(embeds),10):
-        payload={'username':'RPTPFR Challenges','content':f'🏆 **Bilan des challenges RPTPFR — {yesterday.strftime("%d/%m/%Y")}**', 'embeds':embeds[start:start+10]}
-        data=json.dumps(payload,ensure_ascii=False).encode('utf-8')
-        req=urllib.request.Request(webhook,data=data,headers={'Content-Type':'application/json','User-Agent':'RPTPFR-Challenges/1.0'},method='POST')
-        with urllib.request.urlopen(req,timeout=30) as response:
-            if response.status not in (200,204):raise RuntimeError('Discord HTTP '+str(response.status))
+    for target,embeds in deliveries.items():
+        for start in range(0,len(embeds),10):
+            payload={'username':'RPTPFR Challenges','content':f'🏆 **Bilan des challenges RPTPFR — {yesterday.strftime("%d/%m/%Y")}**', 'embeds':embeds[start:start+10]}
+            data=json.dumps(payload,ensure_ascii=False).encode('utf-8')
+            req=urllib.request.Request(target,data=data,headers={'Content-Type':'application/json','User-Agent':'RPTPFR-Challenges/1.0'},method='POST')
+            with urllib.request.urlopen(req,timeout=30) as response:
+                if response.status not in (200,204):raise RuntimeError('Discord HTTP '+str(response.status))
     with challenges.db() as conn:
         conn.execute('INSERT INTO discord_daily_reports(report_day) VALUES (%s) ON CONFLICT DO NOTHING',(yesterday,))
     print('Rapport envoye pour',day)
