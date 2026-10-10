@@ -40,6 +40,25 @@ def vehicle_type(job):
             return 'bus'
     return 'camion'
 
+def city_label(value):
+    """Extrait un nom de ville des objets de localisation Trucky."""
+    if isinstance(value, str):
+        return value.strip()[:120]
+    if isinstance(value, dict):
+        for key in ('city', 'city_name', 'cityName', 'name', 'label', 'title', 'location', 'place'):
+            found = city_label(value.get(key))
+            if found:
+                return found
+    return ''
+
+def find_city(job, paths):
+    for path in paths:
+        value = pick(job, path)
+        city = city_label(value)
+        if city:
+            return city
+    return ''
+
 def normalize(payload):
     if isinstance(payload,list): jobs=payload
     elif isinstance(payload,dict):
@@ -66,8 +85,28 @@ def normalize(payload):
         date=str(pick(j,'completed_at','completedAt','finished_at','finishedAt','delivery_date','date','created_at','createdAt') or '')
         cargo=pick(j,'cargo.name','cargo.title','cargo_name','cargoName','cargo','cargo_data.name','cargoData.name','job.cargo.name','job.cargo','goods.name')
         if isinstance(cargo,dict):cargo=pick(cargo,'name','title','label')
-        origin=pick(j,'source_city.name','sourceCity.name','origin.city.name','origin.name','origin_city','originCity','from_city.name','fromCity.name','from_city','source_city','departure_city.name','departureCity.name')
-        destination=pick(j,'destination_city.name','destinationCity.name','destination.city.name','destination.name','destination_city','destinationCity','to_city.name','toCity.name','to_city','delivery_city.name','deliveryCity.name')
+        origin=find_city(j, (
+            'source_city.name','sourceCity.name','origin.city.name','origin.name','origin_city','originCity',
+            'from_city.name','fromCity.name','from_city','source_city','departure_city.name','departureCity.name',
+            'source.city.name','source.city','source.name','source','departure.city.name','departure.city',
+            'departure.name','departure','from.city.name','from.city','from.name','from',
+            'start.city.name','start.city','start.name','start','pickup.city.name','pickup.city',
+            'pickup.name','pickup','job.source.city','job.origin.city','job.departure.city',
+            'route.from.city','route.origin.city','route.start.city','route.source.city',
+            'route.departure.city','route.from','route.origin','route.start','route.source',
+            'locations.source.city','locations.origin.city','cities.from.name','cities.origin.name'
+        ))
+        destination=find_city(j, (
+            'destination_city.name','destinationCity.name','destination.city.name','destination.name',
+            'destination_city','destinationCity','to_city.name','toCity.name','to_city','delivery_city.name',
+            'deliveryCity.name','destination.city','destination','delivery.city.name','delivery.city',
+            'delivery.name','delivery','to.city.name','to.city','to.name','to',
+            'end.city.name','end.city','end.name','end','dropoff.city.name','dropoff.city',
+            'dropoff.name','dropoff','job.destination.city','job.delivery.city',
+            'route.to.city','route.destination.city','route.end.city','route.delivery.city',
+            'route.arrival.city','route.to','route.destination','route.end','route.delivery',
+            'locations.destination.city','cities.to.name','cities.destination.name'
+        ))
         def label(v):
             if isinstance(v,dict):v=pick(v,'name','title','label')
             return str(v)[:120] if isinstance(v,(str,int,float)) else ''
@@ -259,6 +298,35 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path=='/admin':
             body=challenges.ADMIN_HTML.encode('utf-8')
             self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+        if path=='/api/admin/trucky-fields':
+            if not challenges.logged_in(self):
+                return self.json_response(401, {'error':'Connexion administrateur nécessaire (/admin)'})
+            try:
+                token=os.environ.get('TRUCKY_TOKEN','').strip()
+                if not token:
+                    return self.json_response(503, {'error':'TRUCKY_TOKEN manquant'})
+                request=urllib.request.Request('https://e.truckyapp.com/api/v1/company/22154/jobs',headers={
+                    'x-access-token':token,'Accept':'application/json','User-Agent':'RPTPFR-DriversDashboard/2.0'})
+                with urllib.request.urlopen(request,timeout=25) as response:
+                    payload=json.load(response)
+                jobs=extract_jobs(payload)
+                def field_paths(obj,prefix='',depth=0):
+                    if depth>=5 or not isinstance(obj,dict):return []
+                    result=[]
+                    for key,value in obj.items():
+                        path=(prefix+'.' if prefix else '')+str(key)
+                        result.append(path+'[]' if isinstance(value,list) else path)
+                        if isinstance(value,dict):result.extend(field_paths(value,path,depth+1))
+                    return result[:300]
+                return self.json_response(200,{
+                    'message':'Uniquement les noms des champs Trucky, aucune valeur privée ni token.',
+                    'missions_recues':len(jobs),
+                    'champs_premiere_mission':field_paths(jobs[0]) if jobs else [],
+                    'champs_reponse':list(payload.keys()) if isinstance(payload,dict) else []
+                })
+            except Exception as exc:
+                print('TRUCKY FIELDS:',type(exc).__name__,str(exc),flush=True)
+                return self.json_response(502,{'error':'Diagnostic Trucky indisponible, consulter les logs Render'})
         if path=='/api/admin/challenges':
             if not challenges.logged_in(self):return self.json_response(401,{'error':'Connexion nécessaire'})
             try:return self.json_response(200,{'challenges':challenges.list_challenges()})
