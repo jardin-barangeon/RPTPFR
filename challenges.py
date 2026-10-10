@@ -72,7 +72,7 @@ def announce_creation(values):
     target_url = os.getenv('DISCORD_WEBHOOK_URL', '').strip()
     if not target_url:
         return False, 'Webhook Discord absent : ajoute DISCORD_WEBHOOK_URL dans les variables Environment de Render.'
-    if not target_url.startswith('https://discord.com/api/webhooks/'):
+    if not target_url.startswith(('https://discord.com/api/webhooks/', 'https://discordapp.com/api/webhooks/')):
         return False, 'Adresse webhook Discord invalide.'
     transport_label = {'bus':'BUS 🚌','camion':'CAMION 🚛','all':'BUS + CAMION 🚌🚛'}[transport]
     embed = {
@@ -96,9 +96,10 @@ def announce_creation(values):
                 return False, f'Discord a répondu HTTP {response.status}.'
         return True, 'Annonce Discord envoyée.'
     except urllib.error.HTTPError as error:
-        return False, f'Discord a refusé le message (HTTP {error.code}). Vérifie le webhook.'
-    except (urllib.error.URLError, TimeoutError, OSError):
-        return False, 'Impossible de contacter Discord. Vérifie le webhook et les logs Render.'
+        details={400:'Message rejeté par Discord (HTTP 400).',401:'Webhook non autorisé (HTTP 401).',403:'Accès au webhook refusé (HTTP 403).',404:'Webhook introuvable ou supprimé (HTTP 404).',429:'Limite temporaire Discord (HTTP 429).'}.get(error.code, f'Discord a répondu HTTP {error.code}.')
+        return False, details
+    except (urllib.error.URLError, TimeoutError, OSError) as error:
+        return False, 'Impossible de contacter Discord : erreur réseau ou délai dépassé (' + type(error).__name__ + ').'
 
 def list_challenges():
     with db() as conn:

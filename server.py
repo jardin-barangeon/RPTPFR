@@ -1,4 +1,4 @@
-import json, os, urllib.request, urllib.error, datetime, http.server, socketserver
+import json, os, urllib.request, urllib.error, datetime, http.server, socketserver, logging
 import challenges
 from pathlib import Path
 ROOT=Path(__file__).parent
@@ -207,6 +207,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if method=='POST' and ident is None:
                 values=challenges.validate(data)
                 with challenges.db() as conn:conn.execute('INSERT INTO challenges(title,description,transport,mode,target_km,start_date,end_date,active,discord_webhook) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)',values)
+                # L'enregistrement reste valide même si Discord est temporairement indisponible.
+                sent, discord_message = challenges.announce_creation(values)
+                logging.info('RPTPFR annonce Discord : %s - %s', 'OK' if sent else 'ECHEC', discord_message)
+                return self.json_response(200, {'ok':True,'discord_sent':sent,'discord_message':discord_message})
             elif method=='PUT' and ident is not None:
                 values=challenges.validate(data)
                 with challenges.db() as conn:
