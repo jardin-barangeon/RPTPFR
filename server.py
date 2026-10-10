@@ -1,5 +1,6 @@
 import json, os, urllib.request, urllib.error, datetime, http.server, socketserver
 import challenges
+import scs_news
 from pathlib import Path
 ROOT=Path(__file__).parent
 CONFIG=ROOT/'config.json'
@@ -223,6 +224,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/api/scs/news':
+            try:
+                return self.json_response(200,{'news':scs_news.fetch_news(10)})
+            except Exception:
+                return self.json_response(502,{'error':'Actualités ETS2 temporairement indisponibles'})
         if path=='/api/truckersmp/servers':
             try:
                 request=urllib.request.Request('https://api.truckersmp.com/v2/servers',headers={'Accept':'application/json','User-Agent':'RPTPFR-Dashboard/1.0'})

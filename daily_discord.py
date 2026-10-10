@@ -49,7 +49,7 @@ def main():
               f'**Restant :** {max(0,c["target_km"]-progress):,.0f} km')
         embed={'title':f'{icon} {c["title"][:180]}','description':desc[:4000], 'color':3447003,
                        'footer':{'text':f'{c["mode"].capitalize()} • {c["transport"].upper()} • Trucky RPTPFR'}}
-        target=(c.get('discord_webhook') or webhook).strip()
+        target=webhook
         if not target.startswith('https://discord.com/api/webhooks/'):
             raise RuntimeError('Webhook Discord manquant pour le challenge '+c['title'])
         deliveries.setdefault(target,[]).append(embed)
