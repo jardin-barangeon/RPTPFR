@@ -1,4 +1,5 @@
 import json, os, urllib.request, urllib.error, datetime, http.server, socketserver
+import challenges
 from pathlib import Path
 ROOT=Path(__file__).parent
 CONFIG=ROOT/'config.json'
@@ -177,7 +178,66 @@ def fetch_all(token):
 class Handler(http.server.BaseHTTPRequestHandler):
     def reply(self,status,data):
         body=json.dumps(data,ensure_ascii=False).encode('utf-8');self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(body)
+    def json_response(self,status,data,cookie=None):
+        body=json.dumps(data,ensure_ascii=False,default=str).encode('utf-8')
+        self.send_response(status)
+        self.send_header('Content-Type','application/json; charset=utf-8')
+        self.send_header('Cache-Control','no-store')
+        self.send_header('X-Content-Type-Options','nosniff')
+        if cookie:self.send_header('Set-Cookie',cookie)
+        self.send_header('Content-Length',str(len(body)))
+        self.end_headers();self.wfile.write(body)
+    def do_POST(self):self.mutate('POST')
+    def do_PUT(self):self.mutate('PUT')
+    def do_DELETE(self):self.mutate('DELETE')
+    def mutate(self,method):
+        import re
+        path=self.path.split('?')[0]
+        if not path.startswith('/api/admin/') or not challenges.check_origin(self):return self.json_response(403,{'error':'Requête interdite (origine invalide)'})
+        try:
+            data=challenges.read_json(self)
+            if path=='/api/admin/login' and method=='POST':
+                if not challenges.password_ok(str(data.get('password',''))):return self.json_response(401,{'error':'Mot de passe incorrect'})
+                return self.json_response(200,{'ok':True},challenges.cookie_header(challenges.make_cookie()))
+            if not challenges.logged_in(self):return self.json_response(401,{'error':'Session expirée : reconnecte-toi'})
+            if path=='/api/admin/logout' and method=='POST':return self.json_response(200,{'ok':True},challenges.cookie_header('',0))
+            match=re.fullmatch(r'/api/admin/challenges(?:/(\d+))?',path)
+            if not match:return self.json_response(404,{'error':'Route introuvable'})
+            ident=int(match.group(1)) if match.group(1) else None
+            if method=='POST' and ident is None:
+                values=challenges.validate(data)
+                with challenges.db() as conn:conn.execute('INSERT INTO challenges(title,description,transport,mode,target_km,start_date,end_date,active) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)',values)
+            elif method=='PUT' and ident is not None:
+                values=challenges.validate(data)
+                with challenges.db() as conn:
+                    cur=conn.execute('UPDATE challenges SET title=%s,description=%s,transport=%s,mode=%s,target_km=%s,start_date=%s,end_date=%s,active=%s WHERE id=%s',(*values,ident))
+                    if cur.rowcount==0:return self.json_response(404,{'error':'Challenge introuvable'})
+            elif method=='DELETE' and ident is not None:
+                with challenges.db() as conn:conn.execute('DELETE FROM challenges WHERE id=%s',(ident,))
+            else:return self.json_response(405,{'error':'Méthode non autorisée'})
+            return self.json_response(200,{'ok':True})
+        except (ValueError,KeyError,TypeError,OverflowError) as e:return self.json_response(400,{'error':str(e)})
+        except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
+        path=self.path.split('?')[0]
+        if path=='/admin':
+            body=challenges.ADMIN_HTML.encode('utf-8')
+            self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Cache-Control','no-store');self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'");self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body);return
+        if path=='/api/admin/challenges':
+            if not challenges.logged_in(self):return self.json_response(401,{'error':'Connexion nécessaire'})
+            try:return self.json_response(200,{'challenges':challenges.list_challenges()})
+            except Exception:return self.json_response(503,{'error':'Base de données indisponible'})
+        if path=='/api/challenges':
+            try:
+                token=os.environ.get('TRUCKY_TOKEN','').strip()
+                if not token:return self.json_response(503,{'error':'TRUCKY_TOKEN manquant'})
+                with LOCK:
+                    if CACHE['data'] is None or time.time()-CACHE['time']>300:
+                        CACHE['data']=fetch_all(token);CACHE['time']=time.time()
+                    jobs=CACHE['data']['jobs']
+                return self.json_response(200,{'challenges':challenges.public_challenges(jobs)})
+            except Exception:return self.json_response(503,{'error':'Challenges indisponibles : vérifier la base et Trucky'})
+
         if self.path=='/':
             html=(ROOT/'index.html').read_bytes()
             self.send_response(200);self.send_header('Content-Type','text/html; charset=utf-8');self.send_header('Content-Length',str(len(html)));self.end_headers();self.wfile.write(html);return
@@ -211,6 +271,7 @@ if __name__=='__main__':
     from http.server import ThreadingHTTPServer
     port=int(os.environ.get('PORT','8765'))
     host='0.0.0.0' if os.environ.get('RENDER') else '127.0.0.1'
+    challenges.setup()
     with ThreadingHTTPServer((host,port),Handler) as server:
         print(f'RPTPFR sur {host}:{port}',flush=True)
         server.serve_forever()

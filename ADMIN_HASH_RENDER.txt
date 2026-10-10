@@ -1,0 +1,4 @@
+Dans Render > Environment, remplacer ADMIN_PASSWORD_HASH par :
+pbkdf2_sha256$350000$e24a2a4ccf2f35031134c751f35b47cc$34c3427e624355d37b6a030d1e11f7988a38c81d77d1072cb90430a75f706d00
+
+Mot de passe choisi : admin2206 (a remplacer rapidement, car partage dans la conversation).

@@ -3,11 +3,17 @@ services:
     name: rptpfr-stats
     runtime: python
     plan: starter
-    buildCommand: "echo Installation sans dependances externes"
-    startCommand: "python server.py"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python server.py
     healthCheckPath: /health
     envVars:
       - key: TRUCKY_TOKEN
         sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: ADMIN_PASSWORD_HASH
+        sync: false
+      - key: ADMIN_SESSION_SECRET
+        generateValue: true
       - key: PYTHON_VERSION
         value: 3.13.7
