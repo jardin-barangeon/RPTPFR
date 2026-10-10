@@ -224,7 +224,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
         path=self.path.split('?')[0]
-        if path=='/api/scs/news':
+        if path in ('/api/scs/news', '/api/scs-news'):
             try:
                 return self.json_response(200,{'news':scs_news.fetch_news(10)})
             except Exception:
