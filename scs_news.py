@@ -18,18 +18,23 @@ def fetch_news(count=12):
     items = data.get('appnews', {}).get('newsitems', [])
     if not isinstance(items, list):
         raise ValueError('Réponse Steam inattendue')
+    if not items:
+        raise ValueError('Steam ne renvoie aucune actualité pour ETS2 (appid 227300)')
     out=[]
     for item in items:
         link = str(item.get('url') or '')
         parsed = urlparse(link)
-        if parsed.scheme != 'https' or not parsed.netloc.endswith(('steampowered.com', 'steamcommunity.com', 'steamstatic.com')):
-            continue
+        # Une publication Steam peut renvoyer vers un site externe.
+        # En l'absence de lien HTTPS utilisable, proposer la page officielle ETS2.
+        if parsed.scheme != 'https' or not parsed.netloc:
+            link = 'https://store.steampowered.com/news/app/227300'
         raw = str(item.get('contents') or '')
         raw = re.sub(r'\[/?(?:img|url|b|i|h\d|list|\*|quote|previewyoutube|table|tr|td)[^\]]*\]', ' ', raw, flags=re.I)
         raw = re.sub(r'<[^>]+>', ' ', raw)
         raw = html.unescape(raw)
         raw = re.sub(r'\s+', ' ', raw).strip()
         out.append({'id':str(item.get('gid') or ''),'title':str(item.get('title') or 'Actualité ETS2')[:250], 'date':int(item.get('date') or 0),'url':link,'summary':raw[:350], 'author':str(item.get('author') or '')[:100]})
+    print(f'SCS NEWS: {len(items)} articles reçus de Steam, {len(out)} affichables', flush=True)
     return out
 
 def _db():

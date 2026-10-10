@@ -227,8 +227,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path in ('/api/scs/news', '/api/scs-news'):
             try:
                 return self.json_response(200,{'news':scs_news.fetch_news(10)})
-            except Exception:
-                return self.json_response(502,{'error':'Actualités ETS2 temporairement indisponibles'})
+            except urllib.error.HTTPError as exc:
+                print(f'SCS NEWS: Steam HTTP {exc.code}', flush=True)
+                return self.json_response(502,{'error':f'Steam a répondu HTTP {exc.code}'})
+            except Exception as exc:
+                print(f'SCS NEWS: {type(exc).__name__}: {exc}', flush=True)
+                return self.json_response(502,{'error':'Actualités ETS2 indisponibles : consulter les logs Render (SCS NEWS)'})
         if path=='/api/truckersmp/servers':
             try:
                 request=urllib.request.Request('https://api.truckersmp.com/v2/servers',headers={'Accept':'application/json','User-Agent':'RPTPFR-Dashboard/1.0'})
