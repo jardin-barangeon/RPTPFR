@@ -64,7 +64,14 @@ def normalize(payload):
         except (ValueError,TypeError): ignored+=1; continue
         if not driver: ignored+=1; continue
         date=str(pick(j,'completed_at','completedAt','finished_at','finishedAt','delivery_date','date','created_at','createdAt') or '')
-        out.append({'driver':str(driver),'km':round(km,2),'date':date[:10],'vehicle_type':vehicle_type(j)})
+        cargo=pick(j,'cargo.name','cargo.title','cargo_name','cargoName','cargo','cargo_data.name','cargoData.name','job.cargo.name','job.cargo','goods.name')
+        if isinstance(cargo,dict):cargo=pick(cargo,'name','title','label')
+        origin=pick(j,'source_city.name','sourceCity.name','origin.city.name','origin.name','origin_city','originCity','from_city.name','fromCity.name','from_city','source_city','departure_city.name','departureCity.name')
+        destination=pick(j,'destination_city.name','destinationCity.name','destination.city.name','destination.name','destination_city','destinationCity','to_city.name','toCity.name','to_city','delivery_city.name','deliveryCity.name')
+        def label(v):
+            if isinstance(v,dict):v=pick(v,'name','title','label')
+            return str(v)[:120] if isinstance(v,(str,int,float)) else ''
+        out.append({'driver':str(driver),'km':round(km,2),'date':date[:10],'vehicle_type':vehicle_type(j),'cargo':label(cargo),'origin':label(origin),'destination':label(destination)})
     return {'jobs':out,'ignored':ignored,'total_received':len(jobs)}
 
 # Import local des exports Trucky au format XLSX (bibliotheque standard Python uniquement).
@@ -111,7 +118,7 @@ def load_export(path):
         except (ValueError,TypeError,OverflowError):ignored+=1;continue
         cargo=str(get(row,'cargo')).casefold()
         vehicle='bus' if 'passager' in cargo or 'passenger' in cargo else ('camion' if cargo.strip() else 'inconnu')
-        jobs.append({'driver':driver,'km':round(km,2),'date':date,'vehicle_type':vehicle})
+        jobs.append({'driver':driver,'km':round(km,2),'date':date,'vehicle_type':vehicle,'cargo':str(get(row,'cargo')),'origin':'','destination':''})
     return {'jobs':jobs,'ignored':ignored,'total_received':len(rows)-1,'source':'export XLSX local (mise a jour manuelle)'}
 
 # Synchronisation directe de l'API Trucky, sans Excel.
