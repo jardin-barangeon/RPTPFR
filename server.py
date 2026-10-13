@@ -255,7 +255,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     sent = daily_discord.main(force=True)
                     if not sent:
                         return self.json_response(409,{'error':'Rapport en cours de préparation : réessaie dans quelques instants.'})
-                    return self.json_response(200,{'ok':True,'message':'Classements BUS/CAMION de la veille transmis à Discord. L’envoi automatique de midi reste actif.'})
+                    return self.json_response(200,{'ok':True,'message':'TOP 5 mensuels BUS/CAMION transmis à Discord (cumul arrêté à hier). L’envoi automatique de midi reste actif.'})
                 except urllib.error.HTTPError as exc:
                     print('[TEST CLASSEMENT DISCORD] HTTP', exc.code, flush=True)
                     return self.json_response(502,{'error':'Discord ou Trucky a répondu HTTP '+str(exc.code)})

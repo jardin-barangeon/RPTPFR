@@ -1,4 +1,4 @@
-"""Classements quotidiens BUS/CAMION et bilans des challenges RPTPFR sur Discord.
+"""TOP 5 mensuels BUS/CAMION et bilans quotidiens des challenges RPTPFR sur Discord.
 Exécution automatique par le Web Service à partir de midi (Europe/Paris).
 """
 import datetime
@@ -18,26 +18,30 @@ def fmt_km(value):
 
 
 def daily_embed(jobs, kind, day):
+    # Classement du mois en cours, arrêté à la veille du rapport.
+    # Le filtrage ISO YYYY-MM-DD est fiable pour ces dates normalisées.
+    month_start = day[:7] + '-01'
     totals = {}
     count = 0
     for job in jobs:
-        if job.get('date', '')[:10] != day or job.get('vehicle_type') != kind:
+        job_date = str(job.get('date') or '')[:10]
+        if not (month_start <= job_date <= day) or job.get('vehicle_type') != kind:
             continue
         name = str(job.get('driver') or 'Inconnu')[:70]
         totals[name] = totals.get(name, 0) + float(job.get('km') or 0)
         count += 1
-    ranked = sorted(totals.items(), key=lambda item: (-item[1], item[0].casefold()))[:10]
+    ranked = sorted(totals.items(), key=lambda item: (-item[1], item[0].casefold()))[:5]
     lines = [f'**{rank}.** {name} — **{fmt_km(km)} km**' for rank, (name, km) in enumerate(ranked, 1)]
     return {
-        'title': ('🚌 Classement BUS' if kind == 'bus' else '🚛 Classement CAMION'),
-        'description': '\n'.join(lines) if lines else 'Aucune mission enregistrée pour cette journée.',
+        'title': ('🚌 TOP 5 BUS — mois en cours' if kind == 'bus' else '🚛 TOP 5 CAMION — mois en cours'),
+        'description': '\n'.join(lines) if lines else 'Aucune mission enregistrée pour ce mois.',
         'color': 3447003 if kind == 'bus' else 15105570,
         'fields': [
             {'name': 'Distance totale', 'value': fmt_km(sum(totals.values())) + ' km', 'inline': True},
             {'name': 'Chauffeurs', 'value': str(len(totals)), 'inline': True},
             {'name': 'Missions', 'value': str(count), 'inline': True},
         ],
-        'footer': {'text': 'RPTPFR • Missions terminées Trucky • ' + day},
+        'footer': {'text': 'RPTPFR • Missions terminées Trucky • ' + month_start + ' au ' + day},
     }
 
 
@@ -119,14 +123,15 @@ def main(force=False):
         except Exception as exc:
             # Un problème sur les challenges ne doit pas empêcher les deux classements.
             print('Bilan challenges indisponible :', repr(exc), flush=True)
-        content = f'📊 **Classements quotidiens RPTPFR — {yesterday.strftime("%d/%m/%Y")}**'
+        content = (f'📊 **TOP 5 mensuel CAMION / BUS RPTPFR — {yesterday.strftime("%m/%Y")}**'
+                   f'\n*Cumul du 01/{yesterday.strftime("%m/%Y")} au {yesterday.strftime("%d/%m/%Y")} inclus*')
         if fetched.get('warning'):
             content += '\n⚠️ Historique Trucky possiblement incomplet : classements indicatifs.'
         post_discord(webhook, content, embeds)
         if not force:
             conn.execute('INSERT INTO discord_daily_reports(report_day) VALUES (%s) ON CONFLICT DO NOTHING', (yesterday,))
         conn.commit()
-    print('Classements BUS/CAMION envoyés pour', day, flush=True)
+    print('TOP 5 mensuels BUS/CAMION envoyés, arrêtés au', day, flush=True)
     return True
 
 
