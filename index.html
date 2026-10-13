@@ -40,7 +40,7 @@ async function loadCompanyAnnouncements(){
    target.className='announcement-state';target.textContent='Aucune annonce de la direction pour le moment.';return;
   }
   target.className='announcement-list';
-  for(const entry of payload.announcements){
+  for(const entry of payload.announcements.slice(0,2)){
    const article=document.createElement('article');article.className='announcement-entry';
    const time=document.createElement('time');time.dateTime=entry.created_at;
    const date=new Date(entry.created_at);time.textContent=isNaN(date.getTime())?'Annonce officielle':date.toLocaleString('fr-FR',{dateStyle:'long',timeStyle:'short'});

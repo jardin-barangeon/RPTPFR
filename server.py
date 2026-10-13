@@ -329,8 +329,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             try:
                 with challenges.db() as conn:
                     ensure_company_announcements(conn)
-                    rows=conn.execute('SELECT id,message,created_at FROM company_announcements ORDER BY created_at DESC,id DESC LIMIT 5').fetchall()
-                return self.json_response(200,{'announcements':[{'id':r[0],'message':r[1],'created_at':r[2]} for r in rows]})
+                    rows=conn.execute('SELECT id,message,created_at FROM company_announcements ORDER BY created_at DESC,id DESC LIMIT 2').fetchall()
+                return self.json_response(200,{'announcements':[{'id':r['id'],'message':r['message'],'created_at':r['created_at']} for r in rows]})
             except Exception as exc:
                 print('[ANNONCES ACCUEIL] Lecture échouée :',repr(exc),flush=True)
                 return self.json_response(503,{'error':'Annonces temporairement indisponibles'})
