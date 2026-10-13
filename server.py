@@ -1,6 +1,7 @@
 import json, os, urllib.request, urllib.error, datetime, http.server, socketserver
 import challenges
 import scs_news
+import world_trucky
 from pathlib import Path
 ROOT=Path(__file__).parent
 CONFIG=ROOT/'config.json'
@@ -325,6 +326,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/api/world-rankings':
+            return self.json_response(200,world_trucky.snapshot())
         if path=='/api/company-announcements':
             try:
                 with challenges.db() as conn:

@@ -3,7 +3,7 @@ services:
     name: rptpfr-stats
     runtime: python
     plan: starter
-    buildCommand: pip install -r requirements.txt
+    buildCommand: pip install -r requirements.txt && python -m playwright install chromium
     startCommand: python server.py
     healthCheckPath: /health
     envVars:
