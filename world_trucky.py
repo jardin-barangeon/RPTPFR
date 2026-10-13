@@ -1,7 +1,7 @@
 """Lecture expérimentale des classements publics Trucky, sans authentification.
 Ne renvoie jamais un rang supposé : seulement les lignes visibles et vérifiées.
 """
-import datetime, os, re, threading, time
+import datetime, os, re, threading, time, subprocess, sys
 from urllib.parse import urlparse
 
 START_URL='https://hub.truckyapp.com/leaderboards/companies/distance'
@@ -9,11 +9,28 @@ LOCK=threading.Lock()
 STATE={'status':'idle','updated_at':None,'categories':[],'error':None}
 LAST_ATTEMPT=0
 
+def _launch_chromium(p):
+    """Répare une installation Render où Playwright est présent sans Chromium."""
+    opts={'headless':True,'args':['--no-sandbox','--disable-dev-shm-usage']}
+    try:
+        return p.chromium.launch(**opts)
+    except Exception as exc:
+        msg=str(exc)
+        if 'Executable doesn\'t exist' not in msg and 'playwright install' not in msg.lower():
+            raise
+        # Tentative unique, protégée par le verrou de lecture existant.
+        install=subprocess.run([sys.executable,'-m','playwright','install','chromium'],
+                               capture_output=True,text=True,timeout=180)
+        if install.returncode:
+            raise RuntimeError('Chromium absent sur Render et installation impossible: '
+                               +(install.stderr or install.stdout)[-700:]) from exc
+        return p.chromium.launch(**opts)
+
 def _read():
     from playwright.sync_api import sync_playwright
     categories=[]
     with sync_playwright() as p:
-        browser=p.chromium.launch(headless=True,args=['--no-sandbox','--disable-dev-shm-usage'])
+        browser=_launch_chromium(p)
         try:
             page=browser.new_page(viewport={'width':1440,'height':1000},locale='en-US')
             page.goto(START_URL,wait_until='domcontentloaded',timeout=45000)
