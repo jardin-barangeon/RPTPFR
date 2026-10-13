@@ -222,6 +222,14 @@ def fetch_all(token):
     result.update(source='API Trucky directe',pages_checked=page,warning=warning)
     return result
 
+
+# Annonces publiques de la direction, conservées en PostgreSQL.
+def ensure_company_announcements(conn):
+    conn.execute("""CREATE TABLE IF NOT EXISTS company_announcements (
+        id BIGSERIAL PRIMARY KEY, message TEXT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )""")
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def reply(self,status,data):
         body=json.dumps(data,ensure_ascii=False).encode('utf-8');self.send_response(status);self.send_header('Content-Type','application/json; charset=utf-8');self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.end_headers();self.wfile.write(body)
@@ -287,7 +295,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self.json_response(502,{'error':'Discord a répondu HTTP '+str(exc.code)})
                 except (urllib.error.URLError,TimeoutError):
                     return self.json_response(502,{'error':'Connexion à Discord impossible.'})
-                return self.json_response(200,{'ok':True,'message':'Message transmis à Discord.'})
+                try:
+                    with challenges.db() as conn:
+                        ensure_company_announcements(conn)
+                        conn.execute('INSERT INTO company_announcements(message) VALUES (%s)',(message.strip(),))
+                except Exception as exc:
+                    print('[ANNONCES ACCUEIL] Discord envoyé mais enregistrement échoué :', repr(exc), flush=True)
+                    return self.json_response(200,{'ok':True,'message':'Message envoyé sur Discord, mais non enregistré pour le site. Vérifie DATABASE_URL et les logs Render.'})
+                return self.json_response(200,{'ok':True,'message':'Message transmis à Discord et publié sur la page d’accueil.'})
             match=re.fullmatch(r'/api/admin/challenges(?:/(\d+))?',path)
             if not match:return self.json_response(404,{'error':'Route introuvable'})
             ident=int(match.group(1)) if match.group(1) else None
@@ -310,6 +325,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/api/company-announcements':
+            try:
+                with challenges.db() as conn:
+                    ensure_company_announcements(conn)
+                    rows=conn.execute('SELECT id,message,created_at FROM company_announcements ORDER BY created_at DESC,id DESC LIMIT 5').fetchall()
+                return self.json_response(200,{'announcements':[{'id':r[0],'message':r[1],'created_at':r[2]} for r in rows]})
+            except Exception as exc:
+                print('[ANNONCES ACCUEIL] Lecture échouée :',repr(exc),flush=True)
+                return self.json_response(503,{'error':'Annonces temporairement indisponibles'})
         if path in ('/api/scs/news', '/api/scs-news'):
             try:
                 return self.json_response(200,{'news':scs_news.fetch_news(10)})
