@@ -46,33 +46,36 @@ def daily_embed(jobs, kind, day):
 
 
 def challenge_embeds(jobs, yesterday):
+    """Uniquement les challenges en cours, classement collectif complet."""
     day = yesterday.isoformat()
     output = []
     for c in challenges.list_challenges():
         if not c['active'] or not (c['start_date'] <= yesterday <= c['end_date']):
             continue
-        subset = [j for j in jobs if c['start_date'].isoformat() <= j.get('date', '')[:10] <= day
+        subset = [j for j in jobs
+                  if c['start_date'].isoformat() <= str(j.get('date') or '')[:10] <= day
                   and (c['transport'] == 'all' or j.get('vehicle_type') == c['transport'])]
-        today = [j for j in subset if j.get('date', '')[:10] == day]
-        totals, daily = {}, {}
+        totals = {}
         for j in subset:
-            name = j.get('driver', 'Inconnu')
+            name = str(j.get('driver') or 'Inconnu')
             totals[name] = totals.get(name, 0) + float(j.get('km') or 0)
-        for j in today:
-            name = j.get('driver', 'Inconnu')
-            daily[name] = daily.get(name, 0) + float(j.get('km') or 0)
-        progress = max(totals.values(), default=0) if c['mode'] == 'individuel' else sum(totals.values())
-        ranking = '\n'.join(f'{i}. {name[:55]} — +{fmt_km(km)} km'
-                            for i, (name, km) in enumerate(sorted(daily.items(), key=lambda x: -x[1])[:10], 1))
-        icon = {'bus': '🚌', 'camion': '🚛', 'all': '🚍'}.get(c['transport'], '🏆')
-        target = float(c['target_km'])
-        percent = min(100, 100 * progress / target) if target > 0 else 0
-        desc = (f'**{fmt_km(progress)} / {fmt_km(target)} km** ({percent:.1f} %)\n'
-                f'**Hier :** +{fmt_km(sum(daily.values()))} km • {len(daily)} chauffeur(s)\n'
-                f'**Classement du jour :**\n{ranking or "Aucun trajet ce jour."}\n'
-                f'**Restant :** {fmt_km(max(0, target-progress))} km')
-        output.append({'title': f'{icon} {c["title"][:180]}', 'description': desc[:4000],
-                       'color': 3447003, 'footer': {'text': f'{c["mode"].capitalize()} • {c["transport"].upper()} • RPTPFR'}})
+        ranked = sorted(totals.items(), key=lambda x: (-x[1], x[0].casefold()))
+        icon = {'bus': '🚌', 'camion': '🚛', 'all': '🚌🚛'}.get(c['transport'], '🏆')
+        header = (f'**Distance totale : {fmt_km(sum(totals.values()))} km**\\n'
+                  f'**Chauffeurs participants :** {len(totals)} • **Missions :** {len(subset)}\\n'
+                  f'**Classement général :**\\n')
+        lines = [f'{i}. {name[:55]} — {fmt_km(km)} km'
+                 for i, (name, km) in enumerate(ranked, 1)]
+        description = header + ('\\n'.join(lines) if lines else 'Aucune mission pour le moment.')
+        # Discord limite la description d'un embed à 4096 caractères.
+        if len(description) > 4000:
+            description = description[:3980] + '\\n…'
+        output.append({
+            'title': f'{icon} {c["title"][:180]}',
+            'description': description,
+            'color': 3447003,
+            'footer': {'text': f'Challenge collectif • {c["transport"].upper()} • RPTPFR'}
+        })
     return output
 
 

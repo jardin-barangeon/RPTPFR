@@ -52,7 +52,47 @@ async function loadCompanyAnnouncements(){
 loadCompanyAnnouncements();
 setInterval(loadCompanyAnnouncements,60000);
 </script><script>
-async function loadChallenges(){const root=document.getElementById('challenge-list');try{const r=await fetch('/api/challenges',{cache:'no-store'});const data=await r.json();if(!r.ok)throw Error(data.error||'Erreur');root.replaceChildren();if(!data.challenges.length){root.textContent='Aucun challenge actif pour le moment.';return}for(const c of data.challenges){const card=document.createElement('article');card.style.cssText='background:#1b2a42;border:1px solid #344760;border-radius:12px;padding:18px';const h=document.createElement('h3');h.textContent=c.title;const sub=document.createElement('p');sub.textContent=`${c.transport==='bus'?'🚌 BUS':c.transport==='camion'?'🚛 CAMION':'🚌🚛 MIXTE'} • ${c.mode==='collectif'?'Collectif':'Individuel'} • ${c.start_date} au ${c.end_date}`;const desc=document.createElement('p');desc.textContent=c.description;const val=document.createElement('strong');val.textContent=`${c.progress_km.toLocaleString('fr-FR')} / ${c.target_km.toLocaleString('fr-FR')} km (${c.percent} %)`;const bar=document.createElement('div');bar.style.cssText='height:11px;background:#344760;border-radius:9px;overflow:hidden;margin:12px 0';const fill=document.createElement('div');fill.style.cssText=`height:100%;width:${c.percent}%;background:#5794ef`;bar.append(fill);card.append(h,sub,desc,val,bar);if(c.leaderboard.length){const list=document.createElement('ol');for(const d of c.leaderboard.slice(0,3)){const li=document.createElement('li');li.textContent=`${d.name} — ${d.km.toLocaleString('fr-FR')} km`;list.append(li)}card.append(list)}root.append(card)}}catch(e){root.textContent='Impossible de charger les challenges : '+e.message}}
+async function loadChallenges(){
+ const root=document.getElementById('challenge-list');
+ const section=document.getElementById('challenges');
+ try{
+  const r=await fetch('/api/challenges',{cache:'no-store'});
+  const data=await r.json();
+  if(!r.ok)throw Error(data.error||'Erreur');
+  root.replaceChildren();
+  if(!data.challenges.length){section.style.display='none';return;}
+  section.style.display='';
+  for(const c of data.challenges){
+   const card=document.createElement('article');
+   card.style.cssText='background:#1b2a42;border:1px solid #344760;border-radius:12px;padding:18px';
+   const h=document.createElement('h3');h.textContent=c.title;
+   const sub=document.createElement('p');
+   sub.textContent=`${c.transport==='bus'?'🚌 BUS':c.transport==='camion'?'🚛 CAMION':'🚌🚛 MIXTE'} • Collectif • ${c.start_date} au ${c.end_date}`;
+   const desc=document.createElement('p');desc.textContent=c.description||'';
+   const val=document.createElement('strong');
+   val.textContent=`Total entreprise : ${c.progress_km.toLocaleString('fr-FR')} km`;
+   const info=document.createElement('p');
+   info.textContent=`${c.participants} chauffeur(s) participant(s) • ${c.missions} mission(s)`;
+   card.append(h,sub,desc,val,info);
+   const heading=document.createElement('h4');heading.textContent='🏆 Classement général';card.append(heading);
+   if(c.leaderboard.length){
+    const list=document.createElement('ol');
+    for(const d of c.leaderboard){
+     const li=document.createElement('li');
+     li.textContent=`${d.name} — ${d.km.toLocaleString('fr-FR')} km`;
+     list.append(li);
+    }
+    card.append(list);
+   }else{
+    const empty=document.createElement('p');empty.textContent='Aucune mission pour le moment.';card.append(empty);
+   }
+   root.append(card);
+  }
+ }catch(e){
+  section.style.display='';
+  root.textContent='Impossible de charger les challenges : '+e.message;
+ }
+}
 loadChallenges();setInterval(loadChallenges,300000);
 </script><script>
 (function(){
