@@ -263,7 +263,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     print('[TEST CLASSEMENT DISCORD] Échec :', repr(exc), flush=True)
                     return self.json_response(503,{'error':'Envoi impossible. Consulte les logs Render pour connaître la cause.'})
             if path=='/api/admin/discord-message' and method=='POST':
-                import urllib.error
                 message=data.get('message','')
                 ping=data.get('ping',False)
                 if not isinstance(message,str) or not (1 <= len(message.strip()) <= 1500):
@@ -276,7 +275,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # Mention volontaire uniquement ; toute autre mention est neutralisée.
                 safe=message.strip().replace('@','@\u200b')
                 content=('@everyone\n' if ping else '')+safe
-                payload={'username':'RPTPFR • Administration','content':content,
+                payload={'username':'ЯPTPFR • Service Administration Entreprise','content':content,
                          'allowed_mentions':{'parse':['everyone'] if ping else []}}
                 req=urllib.request.Request(webhook,data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),
                     headers={'Content-Type':'application/json','User-Agent':'RPTPFR-Admin/1.0'},method='POST')

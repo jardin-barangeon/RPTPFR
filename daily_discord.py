@@ -103,7 +103,7 @@ def main(force=False):
     # si Render démarre plusieurs processus/instances en même temps.
     with challenges.db() as conn:
         conn.execute('CREATE TABLE IF NOT EXISTS discord_daily_reports (report_day DATE PRIMARY KEY, sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW())')
-        acquired = conn.execute('SELECT pg_try_advisory_xact_lock(%s)', (221541200,)).fetchone()[0]
+        acquired = conn.execute('SELECT pg_try_advisory_xact_lock(%s)', (221541200,)).fetchone()['pg_try_advisory_xact_lock']
         if not acquired:
             print('Un autre processus prépare déjà le rapport.', flush=True)
             return False
