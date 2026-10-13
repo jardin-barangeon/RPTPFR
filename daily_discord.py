@@ -61,20 +61,23 @@ def challenge_embeds(jobs, yesterday):
             totals[name] = totals.get(name, 0) + float(j.get('km') or 0)
         ranked = sorted(totals.items(), key=lambda x: (-x[1], x[0].casefold()))
         icon = {'bus': '🚌', 'camion': '🚛', 'all': '🚌🚛'}.get(c['transport'], '🏆')
-        header = (f'**Distance totale : {fmt_km(sum(totals.values()))} km**\\n'
-                  f'**Chauffeurs participants :** {len(totals)} • **Missions :** {len(subset)}\\n'
-                  f'**Classement général :**\\n')
-        lines = [f'{i}. {name[:55]} — {fmt_km(km)} km'
+        # Mise en page Discord : vrais retours à la ligne et champs séparés.
+        lines = [f'**{i}.** {name[:55]} — **{fmt_km(km)} km**'
                  for i, (name, km) in enumerate(ranked, 1)]
-        description = header + ('\\n'.join(lines) if lines else 'Aucune mission pour le moment.')
+        description = ('\n'.join(lines) if lines else 'Aucune mission pour le moment.')
         # Discord limite la description d'un embed à 4096 caractères.
         if len(description) > 4000:
-            description = description[:3980] + '\\n…'
+            description = description[:3980].rsplit('\n', 1)[0] + '\n…'
         output.append({
             'title': f'{icon} {c["title"][:180]}',
-            'description': description,
-            'color': 3447003,
-            'footer': {'text': f'Challenge collectif • {c["transport"].upper()} • RPTPFR'}
+            'description': '**🏆 Classement général du challenge**\n\n' + description,
+            'color': 3447003 if c['transport'] == 'bus' else 15105570,
+            'fields': [
+                {'name': '📏 Distance totale', 'value': f'**{fmt_km(sum(totals.values()))} km**', 'inline': True},
+                {'name': '👥 Chauffeurs participants', 'value': str(len(totals)), 'inline': True},
+                {'name': '🚚 Missions', 'value': str(len(subset)), 'inline': True},
+            ],
+            'footer': {'text': f'Challenge collectif • {c["transport"].upper()} • RPTPFR'},
         })
     return output
 
