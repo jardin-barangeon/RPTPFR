@@ -248,6 +248,47 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json_response(200,{'ok':True},challenges.cookie_header(challenges.make_cookie()))
             if not challenges.logged_in(self):return self.json_response(401,{'error':'Session expirée : reconnecte-toi'})
             if path=='/api/admin/logout' and method=='POST':return self.json_response(200,{'ok':True},challenges.cookie_header('',0))
+            if path=='/api/admin/discord-daily-test' and method=='POST':
+                # Envoi manuel du vrai rapport, sans consommer l'envoi automatique de midi.
+                try:
+                    import daily_discord
+                    sent = daily_discord.main(force=True)
+                    if not sent:
+                        return self.json_response(409,{'error':'Rapport en cours de préparation : réessaie dans quelques instants.'})
+                    return self.json_response(200,{'ok':True,'message':'Classements BUS/CAMION de la veille transmis à Discord. L’envoi automatique de midi reste actif.'})
+                except urllib.error.HTTPError as exc:
+                    print('[TEST CLASSEMENT DISCORD] HTTP', exc.code, flush=True)
+                    return self.json_response(502,{'error':'Discord ou Trucky a répondu HTTP '+str(exc.code)})
+                except Exception as exc:
+                    print('[TEST CLASSEMENT DISCORD] Échec :', repr(exc), flush=True)
+                    return self.json_response(503,{'error':'Envoi impossible. Consulte les logs Render pour connaître la cause.'})
+            if path=='/api/admin/discord-message' and method=='POST':
+                import urllib.error
+                message=data.get('message','')
+                ping=data.get('ping',False)
+                if not isinstance(message,str) or not (1 <= len(message.strip()) <= 1500):
+                    return self.json_response(400,{'error':'Message requis (1 à 1500 caractères).'})
+                if not isinstance(ping,bool):
+                    return self.json_response(400,{'error':'Option de mention invalide.'})
+                webhook=os.environ.get('DISCORD_WEBHOOK_URL','').strip()
+                if not webhook.startswith(('https://discord.com/api/webhooks/','https://discordapp.com/api/webhooks/')):
+                    return self.json_response(503,{'error':'DISCORD_WEBHOOK_URL absent du Web Service Render.'})
+                # Mention volontaire uniquement ; toute autre mention est neutralisée.
+                safe=message.strip().replace('@','@\u200b')
+                content=('@everyone\n' if ping else '')+safe
+                payload={'username':'RPTPFR • Administration','content':content,
+                         'allowed_mentions':{'parse':['everyone'] if ping else []}}
+                req=urllib.request.Request(webhook,data=json.dumps(payload,ensure_ascii=False).encode('utf-8'),
+                    headers={'Content-Type':'application/json','User-Agent':'RPTPFR-Admin/1.0'},method='POST')
+                try:
+                    with urllib.request.urlopen(req,timeout=15) as response:
+                        if response.status not in (200,204):
+                            return self.json_response(502,{'error':'Discord a répondu HTTP '+str(response.status)})
+                except urllib.error.HTTPError as exc:
+                    return self.json_response(502,{'error':'Discord a répondu HTTP '+str(exc.code)})
+                except (urllib.error.URLError,TimeoutError):
+                    return self.json_response(502,{'error':'Connexion à Discord impossible.'})
+                return self.json_response(200,{'ok':True,'message':'Message transmis à Discord.'})
             match=re.fullmatch(r'/api/admin/challenges(?:/(\d+))?',path)
             if not match:return self.json_response(404,{'error':'Route introuvable'})
             ident=int(match.group(1)) if match.group(1) else None
@@ -371,11 +412,37 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:self.reply(502,{'error':f'Trucky a répondu HTTP {e.code}. Vérifie le token et les autorisations.'})
         except Exception as e:self.reply(502,{'error':str(e)})
 
+def start_daily_discord_scheduler():
+    """Programmation intégrée, sans Cron Job, à partir de 12 h heure de Paris."""
+    import threading
+    from zoneinfo import ZoneInfo
+    paris = ZoneInfo('Europe/Paris')
+
+    def worker():
+        import daily_discord
+        last_attempt = None
+        while True:
+            try:
+                now = datetime.datetime.now(paris)
+                # Vérification chaque minute ; une relance après midi rattrape le rapport.
+                # Limite les tentatives à une par tranche de 15 minutes.
+                attempt = (now.date(), now.hour, now.minute // 15)
+                if now.hour >= 12 and attempt != last_attempt:
+                    last_attempt = attempt
+                    daily_discord.main()
+            except Exception as exc:
+                print('[DISCORD QUOTIDIEN] Échec :', repr(exc), flush=True)
+            time.sleep(60)
+
+    threading.Thread(target=worker, name='rptpfr-discord-daily', daemon=True).start()
+    print('[DISCORD QUOTIDIEN] Programmateur interne démarré (Europe/Paris, 12 h).', flush=True)
+
 if __name__=='__main__':
     from http.server import ThreadingHTTPServer
     port=int(os.environ.get('PORT','8765'))
     host='0.0.0.0' if os.environ.get('RENDER') else '127.0.0.1'
     challenges.setup()
+    start_daily_discord_scheduler()
     with ThreadingHTTPServer((host,port),Handler) as server:
         print(f'RPTPFR sur {host}:{port}',flush=True)
         server.serve_forever()
