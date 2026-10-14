@@ -50,20 +50,30 @@ CARD_JS = r"""() => {
 
 
 def _select_mode(page, mode):
-    """Choisit un mode dans le menu Trucky (dropdown non natif)."""
-    # Le bouton affiche le mode courant ; essayer d'abord les boutons.
-    trigger = page.get_by_role('button', name=re.compile(r'Total|Distance|WOTR|TruckersMP|Transport public', re.I))
+    """Sélectionne explicitement le filtre de transport, puis lance la recherche."""
+    # Trucky utilise un menu personnalisé. On ouvre le menu via son libellé
+    # courant, sans cliquer sur les noms des entreprises dans les cartes.
+    choices = page.get_by_text(mode, exact=True)
+    if mode == 'Transport public':
+        # Au premier affichage, le filtre est souvent déjà sur Transport public.
+        trigger = page.get_by_text('Transport public', exact=True).first
+    else:
+        trigger = page.get_by_text('Transport public', exact=True).first
     try:
-        if trigger.count():
-            trigger.first.click(timeout=3500)
+        # Les filtres sont regroupés au-dessus du bouton Rechercher.
+        # Le bouton du menu est souvent le seul affichant le mode actif.
+        candidate = page.locator('button').filter(has_text=re.compile(r'^(Total|Distance \(Réel\)|Distance \(Course\)|WOTR|TruckersMP|Transport public)\s*[⌄▾▼]?$'))
+        if candidate.count():
+            candidate.first.click(timeout=4000)
         else:
-            page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
+            trigger.click(timeout=4000)
+        page.get_by_text(mode, exact=True).last.click(timeout=4000)
     except Exception:
-        page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
-    option = page.get_by_text(mode, exact=True)
-    option.last.click(timeout=5000)
-    page.get_by_text('Rechercher', exact=True).first.click(timeout=5000)
-    page.wait_for_timeout(1800)
+        # Si le mode demandé est déjà sélectionné, le bouton Rechercher suffit.
+        if not page.get_by_text(mode, exact=True).count():
+            raise
+    page.get_by_text('Rechercher', exact=True).first.click(timeout=6000)
+    page.wait_for_timeout(2500)
 
 
 def _read():
@@ -73,27 +83,53 @@ def _read():
         browser = pw.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
         try:
             page = browser.new_page(viewport={'width': 1600, 'height': 1100}, locale='fr-FR')
-            page.goto(START_URL, wait_until='domcontentloaded', timeout=25000)
-            page.wait_for_timeout(2500)
-            # La capture utilisateur confirme ETS2 sélectionné par défaut et le
-            # mois courant. Aucun filtre pays n'est appliqué (monde entier).
+            page.goto(START_URL, wait_until='domcontentloaded', timeout=30000)
+            page.wait_for_timeout(3500)
             for mode in MODES:
                 entry = {'name': mode, 'url': START_URL, 'top10': [], 'rptpfr': None,
                          'loaded_rows': 0, 'verified': False}
                 try:
                     _select_mode(page, mode)
                     cards = page.evaluate(CARD_JS)
-                    entry['loaded_rows'] = len(cards)
-                    entry['top10'] = [f"{c['rank']}. {c['name']} — {c['distance']}" for c in cards if c['rank'] <= 10][:10]
+                    # Le TOP 10 provient de la première page. Ne jamais attribuer
+                    # une position à partir du numéro d'une ligne locale.
+                    first_page = list(cards)
+                    entry['top10'] = [f"{c['name']} — {c['distance']}" for c in first_page if c['rank'] <= 10][:10]
                     entry['verified'] = bool(entry['top10'])
+                    entry['loaded_rows'] = len(cards)
                     own = next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()), None)
+                    # Parcours limité des pages pour chercher notre entreprise.
+                    # Ne pas annoncer un rang si la pagination n'est pas fiable.
+                    for page_number in range(2, 6):
+                        if own or not entry['verified']:
+                            break
+                        # Les boutons de pagination affichent le numéro de page.
+                        next_page = page.get_by_role('button', name=str(page_number), exact=True)
+                        if not next_page.count():
+                            break
+                        try:
+                            next_page.last.click(timeout=2500)
+                            page.wait_for_timeout(1100)
+                            more = page.evaluate(CARD_JS)
+                        except Exception:
+                            break
+                        if not more or [(c['name'], c['distance']) for c in more] == [(c['name'], c['distance']) for c in cards]:
+                            break
+                        cards = more
+                        entry['loaded_rows'] += len(more)
+                        own = next((c for c in more if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()), None)
                     if own:
                         entry['rptpfr'] = f"{own['rank']}. {own['name']} — {own['distance']}"
                     if not entry['verified']:
-                        entry['error'] = 'Aucune carte de classement identifiable dans le HTML rendu'
+                        entry['error'] = 'Aucune carte de classement identifiable après sélection du filtre'
                 except Exception as exc:
-                    entry['error'] = f'{type(exc).__name__}: {str(exc)[:140]}'
+                    entry['error'] = f'{type(exc).__name__}: {str(exc)[:180]}'
                 categories.append(entry)
+                # Revenir à une page neuve pour éviter les effets de pagination
+                # entre deux modes différents.
+                if mode != MODES[-1]:
+                    page.goto(START_URL, wait_until='domcontentloaded', timeout=30000)
+                    page.wait_for_timeout(1800)
         finally:
             browser.close()
     return categories
