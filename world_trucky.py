@@ -22,6 +22,7 @@ STATE = {'status': 'idle', 'updated_at': None, 'categories': [
 NEXT_ATTEMPT = 0.0
 NEXT_INDEX = 0
 RUNNING = False
+BACKGROUND_STARTED = False
 
 CARD_JS = r"""() => {
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
@@ -118,7 +119,7 @@ def _select_mode(page, mode):
     # Vérifier le libellé affiché dans le sélecteur avant d'attribuer les
     # données à la catégorie, sans cliquer sur un bouton inexistant.
     confirmed = page.evaluate(r"""(target) => {
-      const clean = x => (x || '').replace(/\\s+/g, ' ').trim();
+      const clean = x => (x || '').replace(/\s+/g, ' ').trim();
       const visible = e => !!e.getClientRects().length;
       return [...document.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
         .some(e => visible(e) && clean(e.innerText || e.textContent) === target);
@@ -199,9 +200,23 @@ def _worker(index):
             RUNNING = False
 
 
+def _background_loop():
+    # Une visite suffit pour démarrer le cycle ; il continue sans autre requête HTTP.
+    while True:
+        time.sleep(15)
+        try:
+            snapshot()
+        except Exception as exc:
+            print('[TRUCKY MONDIAL] Planificateur:', repr(exc), flush=True)
+
+
 def snapshot():
-    global RUNNING, NEXT_ATTEMPT, NEXT_INDEX
+    global RUNNING, NEXT_ATTEMPT, NEXT_INDEX, BACKGROUND_STARTED
     with LOCK:
+        if not BACKGROUND_STARTED:
+            BACKGROUND_STARTED = True
+            threading.Thread(target=_background_loop, daemon=True,
+                             name='trucky-world-scheduler').start()
         now = time.monotonic()
         if not RUNNING and now >= NEXT_ATTEMPT:
             index = NEXT_INDEX
