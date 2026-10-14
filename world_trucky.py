@@ -59,16 +59,67 @@ CARD_JS = r"""() => {
 
 
 def _select_mode(page, mode):
-    # Le menu Trucky est un sélecteur JavaScript, pas un <select> HTML.
-    trigger = page.get_by_role('button', name=re.compile(
-        r'Total|Distance|WOTR|TruckersMP|Transport public', re.I))
-    if trigger.count():
-        trigger.first.click(timeout=3500)
-    else:
-        page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
-    page.get_by_text(mode, exact=True).last.click(timeout=5000)
-    page.get_by_text('Rechercher', exact=True).first.click(timeout=5000)
-    page.wait_for_timeout(1500)
+    """Pilote le menu Truck Mode (dropdown JS) sans supposer un bouton par mode."""
+    # Trucky affiche le mode courant dans un sélecteur; son texte initial est
+    # généralement « Transport public ». Les options sont visibles après clic.
+    # On s'appuie sur la structure réelle des éléments cliquables, pas sur
+    # get_by_role('button', name='Total|...') qui échouait.
+    result = page.evaluate(r"""(target) => {
+      const names = ['Total', 'Distance (Réel)', 'Distance (Course)',
+                     'WOTR', 'TruckersMP', 'Transport public'];
+      const clean = x => (x || '').replace(/\s+/g, ' ').trim();
+      const visible = e => !!(e.getClientRects().length) &&
+        getComputedStyle(e).visibility !== 'hidden';
+      const candidates = [...document.querySelectorAll('button, [role="button"], [role="combobox"], [aria-haspopup], select')]
+        .filter(visible).filter(e => names.some(n => clean(e.innerText || e.textContent) === n));
+      let trigger = candidates.find(e => e.getAttribute('aria-haspopup')) ||
+                    candidates.find(e => clean(e.innerText || e.textContent) === 'Transport public') ||
+                    candidates[0];
+      if (!trigger) {
+        const label = [...document.querySelectorAll('body *')]
+          .filter(e => visible(e) && e.children.length === 0 &&
+                       names.some(n => clean(e.textContent) === n))
+          .find(e => clean(e.textContent) === 'Transport public');
+        trigger = label && (label.closest('button,[role="button"],[role="combobox"],[aria-haspopup]') || label.parentElement);
+      }
+      if (!trigger) return {ok:false, reason:'Sélecteur Truck Mode introuvable'};
+      const current = clean(trigger.innerText || trigger.textContent);
+      if (current === target) return {ok:true, current, already:true};
+      trigger.click();
+      return {ok:true, current, already:false};
+    }""", mode)
+    if not result.get('ok'):
+        raise RuntimeError(result.get('reason', 'Sélecteur Truck Mode indisponible'))
+    if not result.get('already'):
+        page.wait_for_timeout(350)
+        selected = page.evaluate(r"""(target) => {
+          const clean = x => (x || '').replace(/\s+/g, ' ').trim();
+          const visible = e => !!e.getClientRects().length &&
+            getComputedStyle(e).visibility !== 'hidden';
+          const opts = [...document.querySelectorAll('[role="option"], [role="menuitem"], li, button, a, div, span')]
+            .filter(e => visible(e) && clean(e.innerText || e.textContent) === target)
+            .sort((a,b) => (a.children.length - b.children.length));
+          const item = opts.find(e => e.closest('[role="listbox"],[role="menu"],ul')) || opts[0];
+          if (!item) return false;
+          (item.closest('[role="option"],[role="menuitem"],li,button,a') || item).click();
+          return true;
+        }""", mode)
+        if not selected:
+            raise RuntimeError(f'Option Truck Mode introuvable : {mode}')
+        page.wait_for_timeout(250)
+    search = page.get_by_text('Rechercher', exact=True)
+    search.first.click(timeout=6000)
+    page.wait_for_timeout(1700)
+    # Vérifier que le filtre affiché est bien celui demandé, sinon ne pas
+    # attribuer les données d'une catégorie à une autre.
+    confirmed = page.evaluate(r"""(target) => {
+      const clean = x => (x || '').replace(/\s+/g, ' ').trim();
+      const visible = e => !!e.getClientRects().length;
+      return [...document.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
+        .some(e => visible(e) && clean(e.innerText || e.textContent) === target);
+    }""", mode)
+    if not confirmed:
+        raise RuntimeError(f'Filtre {mode} non confirmé après sélection')
 
 
 def _read_one(mode):
