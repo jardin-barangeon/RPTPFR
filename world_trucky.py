@@ -107,13 +107,18 @@ def _select_mode(page, mode):
         if not selected:
             raise RuntimeError(f'Option Truck Mode introuvable : {mode}')
         page.wait_for_timeout(250)
-    search = page.get_by_text('Rechercher', exact=True)
-    search.first.click(timeout=6000)
-    page.wait_for_timeout(1700)
-    # Vérifier que le filtre affiché est bien celui demandé, sinon ne pas
-    # attribuer les données d'une catégorie à une autre.
+    # Le changement de Truck Mode actualise Trucky automatiquement :
+    # le bouton « Rechercher » concerne d'autres filtres, pas ce menu.
+    # Laisser l'interface charger les cartes de la catégorie sélectionnée.
+    try:
+        page.wait_for_load_state('networkidle', timeout=9000)
+    except Exception:
+        pass  # Certains appels de télémétrie empêchent networkidle.
+    page.wait_for_timeout(1100)
+    # Vérifier le libellé affiché dans le sélecteur avant d'attribuer les
+    # données à la catégorie, sans cliquer sur un bouton inexistant.
     confirmed = page.evaluate(r"""(target) => {
-      const clean = x => (x || '').replace(/\s+/g, ' ').trim();
+      const clean = x => (x || '').replace(/\\s+/g, ' ').trim();
       const visible = e => !!e.getClientRects().length;
       return [...document.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
         .some(e => visible(e) && clean(e.innerText || e.textContent) === target);
