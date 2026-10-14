@@ -1,79 +1,122 @@
-"""Lecture expérimentale des classements publics Trucky, sans authentification.
-Ne renvoie jamais un rang supposé : seulement les lignes visibles et vérifiées.
+"""Classements publics Trucky ETS2 (mois courant), lecture best-effort.
+Aucun rang n'est inventé : seules les cartes effectivement lues sont publiées.
 """
-import datetime, os, re, threading, time, subprocess, sys
-from urllib.parse import urlparse
+import datetime as dt
+import re
+import threading
+import time
 
-START_URL='https://hub.truckyapp.com/leaderboards/companies/distance'
-LOCK=threading.Lock()
-STATE={'status':'idle','updated_at':None,'categories':[],'error':None}
-LAST_ATTEMPT=0
+START_URL = 'https://hub.truckyapp.com/leaderboards/companies/distance'
+MODES = ['Total', 'Distance (Réel)', 'Distance (Course)', 'WOTR', 'TruckersMP', 'Transport public']
+LOCK = threading.Lock()
+STATE = {'status': 'idle', 'updated_at': None, 'categories': [], 'error': None}
+LAST_ATTEMPT = 0
 
-def _launch_chromium(p):
-    """Répare une installation Render où Playwright est présent sans Chromium."""
-    opts={'headless':True,'args':['--no-sandbox','--disable-dev-shm-usage']}
+# Trucky affiche des cartes, et non des lignes <table>. On cherche les cartes
+# qui possèdent un kilométrage, un nom et un numéro de classement visibles.
+CARD_JS = r"""() => {
+  const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+  const kmRE = /\b([\d\s.,]+)\s*km\b/i;
+  const result = [], seen = new Set();
+  const leaves = [...document.querySelectorAll('body *')].filter(e =>
+    e.children.length === 0 && kmRE.test(clean(e.textContent)) &&
+    clean(e.textContent).length < 65);
+  for (const leaf of leaves) {
+    let node = leaf, chosen = null;
+    for (let i = 0; i < 7 && node; i++, node = node.parentElement) {
+      const txt = clean(node.innerText);
+      if (txt.length > 12 && txt.length < 260 && kmRE.test(txt) &&
+          (node.querySelector('img') || /^\d{1,4}\b/.test(txt))) {
+        chosen = node; break;
+      }
+    }
+    if (!chosen) continue;
+    const text = clean(chosen.innerText);
+    const km = text.match(kmRE);
+    if (!km) continue;
+    const parts = chosen.innerText.split(/\n+/).map(clean).filter(Boolean);
+    const rankPart = parts.find(s => /^\d{1,5}$/.test(s));
+    const rank = rankPart ? Number(rankPart) : null;
+    const name = parts.find(s => s !== rankPart && !kmRE.test(s) &&
+       !/^(FR|US|CZ|DE|PL|RU|GB|ES|IT)$/i.test(s) && s.length > 2);
+    if (!name || !rank || rank > 100000) continue;
+    const key = `${rank}|${name}|${km[1]}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push({rank, name, distance: clean(km[0]), text});
+  }
+  return result.sort((a,b) => a.rank - b.rank);
+}"""
+
+
+def _select_mode(page, mode):
+    """Choisit un mode dans le menu Trucky (dropdown non natif)."""
+    # Le bouton affiche le mode courant ; essayer d'abord les boutons.
+    trigger = page.get_by_role('button', name=re.compile(r'Total|Distance|WOTR|TruckersMP|Transport public', re.I))
     try:
-        return p.chromium.launch(**opts)
-    except Exception as exc:
-        msg=str(exc)
-        if 'Executable doesn\'t exist' not in msg and 'playwright install' not in msg.lower():
-            raise
-        # Tentative unique, protégée par le verrou de lecture existant.
-        install=subprocess.run([sys.executable,'-m','playwright','install','chromium'],
-                               capture_output=True,text=True,timeout=180)
-        if install.returncode:
-            raise RuntimeError('Chromium absent sur Render et installation impossible: '
-                               +(install.stderr or install.stdout)[-700:]) from exc
-        return p.chromium.launch(**opts)
+        if trigger.count():
+            trigger.first.click(timeout=3500)
+        else:
+            page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
+    except Exception:
+        page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
+    option = page.get_by_text(mode, exact=True)
+    option.last.click(timeout=5000)
+    page.get_by_text('Rechercher', exact=True).first.click(timeout=5000)
+    page.wait_for_timeout(1800)
+
 
 def _read():
     from playwright.sync_api import sync_playwright
-    categories=[]
-    with sync_playwright() as p:
-        browser=_launch_chromium(p)
+    categories = []
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
         try:
-            page=browser.new_page(viewport={'width':1440,'height':1000},locale='en-US')
-            page.goto(START_URL,wait_until='domcontentloaded',timeout=45000)
-            page.wait_for_timeout(4500)
-            # Découvrir les catégories réellement présentes, sans inventer de routes.
-            links=page.locator('a[href]').evaluate_all('els => els.map(e=>({name:e.innerText.trim(),href:e.href}))')
-            urls=[{'name':'Distance','url':START_URL}]
-            for item in links:
-                url=item.get('href','')
-                u=urlparse(url)
-                if u.hostname=='hub.truckyapp.com' and '/leaderboards/companies/' in u.path and url not in [v['url'] for v in urls]:
-                    urls.append({'name':item.get('name') or u.path.rsplit('/',1)[-1],'url':url})
-            for entry in urls[:12]:
+            page = browser.new_page(viewport={'width': 1600, 'height': 1100}, locale='fr-FR')
+            page.goto(START_URL, wait_until='domcontentloaded', timeout=25000)
+            page.wait_for_timeout(2500)
+            # La capture utilisateur confirme ETS2 sélectionné par défaut et le
+            # mois courant. Aucun filtre pays n'est appliqué (monde entier).
+            for mode in MODES:
+                entry = {'name': mode, 'url': START_URL, 'top10': [], 'rptpfr': None,
+                         'loaded_rows': 0, 'verified': False}
                 try:
-                    page.goto(entry['url'],wait_until='domcontentloaded',timeout=30000)
-                    page.wait_for_timeout(2800)
-                    rows=page.locator('table tbody tr').evaluate_all('els => els.map(e=>e.innerText.trim())')
-                    # Certains tableaux utilisent des éléments ARIA plutôt que table/tr.
-                    if not rows:
-                        rows=page.locator('[role="row"]').evaluate_all('els => els.map(e=>e.innerText.trim())')
-                    rows=[re.sub(r'\s+',' ',v).strip() for v in rows if v.strip()]
-                    # Ne pas interpréter une page de connexion comme un classement.
-                    categories.append({'name':entry['name'][:70],'url':entry['url'],'top10':rows[:10],
-                                       'rptpfr':next((r for r in rows if 'ЯPTPFR' in r or 'RPTPFR' in r.upper()),None),
-                                       'loaded_rows':len(rows),'verified':bool(rows)})
+                    _select_mode(page, mode)
+                    cards = page.evaluate(CARD_JS)
+                    entry['loaded_rows'] = len(cards)
+                    entry['top10'] = [f"{c['rank']}. {c['name']} — {c['distance']}" for c in cards if c['rank'] <= 10][:10]
+                    entry['verified'] = bool(entry['top10'])
+                    own = next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()), None)
+                    if own:
+                        entry['rptpfr'] = f"{own['rank']}. {own['name']} — {own['distance']}"
+                    if not entry['verified']:
+                        entry['error'] = 'Aucune carte de classement identifiable dans le HTML rendu'
                 except Exception as exc:
-                    categories.append({'name':entry['name'][:70],'url':entry['url'],'top10':[],
-                                       'rptpfr':None,'loaded_rows':0,'verified':False,'error':str(exc)[:120]})
-        finally:browser.close()
+                    entry['error'] = f'{type(exc).__name__}: {str(exc)[:140]}'
+                categories.append(entry)
+        finally:
+            browser.close()
     return categories
+
 
 def _worker():
     try:
-        categories=_read()
-        with LOCK:STATE.update(status='ready',categories=categories,updated_at=datetime.datetime.now(datetime.timezone.utc).isoformat(),error=None)
+        categories = _read()
+        with LOCK:
+            STATE.update(status='ready', categories=categories,
+                         updated_at=dt.datetime.now(dt.timezone.utc).isoformat(), error=None)
     except Exception as exc:
-        with LOCK:STATE.update(status='error',error=f'{type(exc).__name__}: {str(exc)[:240]}')
-        print('[TRUCKY MONDIAL]',repr(exc),flush=True)
+        with LOCK:
+            STATE.update(status='error', error=f'{type(exc).__name__}: {str(exc)[:220]}',
+                         updated_at=dt.datetime.now(dt.timezone.utc).isoformat())
+        print('[TRUCKY MONDIAL]', repr(exc), flush=True)
+
 
 def snapshot():
     global LAST_ATTEMPT
     with LOCK:
-        if STATE['status']!='loading' and time.time()-LAST_ATTEMPT>3600:
-            LAST_ATTEMPT=time.time();STATE['status']='loading'
-            threading.Thread(target=_worker,daemon=True,name='trucky-world').start()
+        if STATE['status'] != 'loading' and time.time() - LAST_ATTEMPT > 3600:
+            LAST_ATTEMPT = time.time()
+            STATE['status'] = 'loading'
+            threading.Thread(target=_worker, daemon=True, name='trucky-world').start()
         return dict(STATE)
