@@ -1,19 +1,28 @@
-"""Classements publics Trucky ETS2 (mois courant), lecture best-effort.
-Aucun rang n'est inventé : seules les cartes effectivement lues sont publiées.
+"""Lecture prudente des classements Trucky ETS2.
+
+Une seule catégorie par passage, un seul Chromium à la fois. Les résultats
+valides ne sont jamais remplacés par une réponse vide ou une erreur.
 """
 import datetime as dt
+import json
+import os
 import re
 import threading
 import time
+from pathlib import Path
 
 START_URL = 'https://hub.truckyapp.com/leaderboards/companies/distance'
 MODES = ['Total', 'Distance (Réel)', 'Distance (Course)', 'WOTR', 'TruckersMP', 'Transport public']
+INTERVAL = int(os.environ.get('TRUCKY_WORLD_INTERVAL', '180'))
+CACHE_FILE = Path(os.environ.get('TRUCKY_WORLD_CACHE_FILE', '/tmp/rptpfr_world_rankings.json'))
 LOCK = threading.Lock()
-STATE = {'status': 'idle', 'updated_at': None, 'categories': [], 'error': None}
-LAST_ATTEMPT = 0
+STATE = {'status': 'idle', 'updated_at': None, 'categories': [
+    {'name': name, 'url': START_URL, 'top10': [], 'rptpfr': None,
+     'loaded_rows': 0, 'verified': False} for name in MODES], 'error': None}
+NEXT_ATTEMPT = 0.0
+NEXT_INDEX = 0
+RUNNING = False
 
-# Trucky affiche des cartes, et non des lignes <table>. On cherche les cartes
-# qui possèdent un kilométrage, un nom et un numéro de classement visibles.
 CARD_JS = r"""() => {
   const clean = s => (s || '').replace(/\s+/g, ' ').trim();
   const kmRE = /\b([\d\s.,]+)\s*km\b/i;
@@ -50,73 +59,104 @@ CARD_JS = r"""() => {
 
 
 def _select_mode(page, mode):
-    """Choisit un mode dans le menu Trucky (dropdown non natif)."""
-    # Le bouton affiche le mode courant ; essayer d'abord les boutons.
-    trigger = page.get_by_role('button', name=re.compile(r'Total|Distance|WOTR|TruckersMP|Transport public', re.I))
-    try:
-        if trigger.count():
-            trigger.first.click(timeout=3500)
-        else:
-            page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
-    except Exception:
+    # Le menu Trucky est un sélecteur JavaScript, pas un <select> HTML.
+    trigger = page.get_by_role('button', name=re.compile(
+        r'Total|Distance|WOTR|TruckersMP|Transport public', re.I))
+    if trigger.count():
+        trigger.first.click(timeout=3500)
+    else:
         page.get_by_text('Transport public', exact=True).first.click(timeout=3500)
-    option = page.get_by_text(mode, exact=True)
-    option.last.click(timeout=5000)
+    page.get_by_text(mode, exact=True).last.click(timeout=5000)
     page.get_by_text('Rechercher', exact=True).first.click(timeout=5000)
-    page.wait_for_timeout(1800)
+    page.wait_for_timeout(1500)
 
 
-def _read():
+def _read_one(mode):
     from playwright.sync_api import sync_playwright
-    categories = []
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True, args=['--no-sandbox', '--disable-dev-shm-usage'])
+        browser = pw.chromium.launch(headless=True,
+                                     args=['--no-sandbox', '--disable-dev-shm-usage'])
         try:
             page = browser.new_page(viewport={'width': 1600, 'height': 1100}, locale='fr-FR')
-            page.goto(START_URL, wait_until='domcontentloaded', timeout=25000)
-            page.wait_for_timeout(2500)
-            # La capture utilisateur confirme ETS2 sélectionné par défaut et le
-            # mois courant. Aucun filtre pays n'est appliqué (monde entier).
-            for mode in MODES:
-                entry = {'name': mode, 'url': START_URL, 'top10': [], 'rptpfr': None,
-                         'loaded_rows': 0, 'verified': False}
-                try:
-                    _select_mode(page, mode)
-                    cards = page.evaluate(CARD_JS)
-                    entry['loaded_rows'] = len(cards)
-                    entry['top10'] = [f"{c['rank']}. {c['name']} — {c['distance']}" for c in cards if c['rank'] <= 10][:10]
-                    entry['verified'] = bool(entry['top10'])
-                    own = next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()), None)
-                    if own:
-                        entry['rptpfr'] = f"{own['rank']}. {own['name']} — {own['distance']}"
-                    if not entry['verified']:
-                        entry['error'] = 'Aucune carte de classement identifiable dans le HTML rendu'
-                except Exception as exc:
-                    entry['error'] = f'{type(exc).__name__}: {str(exc)[:140]}'
-                categories.append(entry)
+            page.set_default_timeout(5000)
+            page.goto(START_URL, wait_until='domcontentloaded', timeout=20000)
+            page.wait_for_timeout(1600)
+            _select_mode(page, mode)
+            cards = page.evaluate(CARD_JS)
+            # Le rang est déjà fourni par le HTML de la page d'accueil.
+            top = [f"{c['name']} — {c['distance']}" for c in cards if c['rank'] <= 10][:10]
+            own = next((c for c in cards if 'RPTPFR' in c['name'].upper()
+                        or 'ЯPTPFR' in c['name'].upper()), None)
+            return {'name': mode, 'url': START_URL, 'top10': top,
+                    'rptpfr': f"{own['rank']}. {own['name']} — {own['distance']}" if own else None,
+                    'loaded_rows': len(cards), 'verified': bool(top)}
         finally:
             browser.close()
-    return categories
 
 
-def _worker():
+def _save_cache():
     try:
-        categories = _read()
+        CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        temp = CACHE_FILE.with_suffix('.tmp')
+        temp.write_text(json.dumps({'categories': STATE['categories'],
+                                    'updated_at': STATE['updated_at']}, ensure_ascii=False), encoding='utf-8')
+        temp.replace(CACHE_FILE)
+    except OSError as exc:
+        print('[TRUCKY MONDIAL] Cache local non disponible:', str(exc), flush=True)
+
+
+def _restore_cache():
+    try:
+        saved = json.loads(CACHE_FILE.read_text(encoding='utf-8'))
+        known = {x['name']: x for x in saved.get('categories', []) if x.get('verified')}
+        for i, cat in enumerate(STATE['categories']):
+            if cat['name'] in known:
+                STATE['categories'][i] = known[cat['name']]
+        STATE['updated_at'] = saved.get('updated_at')
+        if known:
+            STATE['status'] = 'ready'
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+
+
+def _worker(index):
+    global RUNNING
+    mode = MODES[index]
+    try:
+        result = _read_one(mode)
         with LOCK:
-            STATE.update(status='ready', categories=categories,
-                         updated_at=dt.datetime.now(dt.timezone.utc).isoformat(), error=None)
+            if result['verified']:
+                STATE['categories'][index] = result
+                STATE['updated_at'] = dt.datetime.now(dt.timezone.utc).isoformat()
+                STATE['error'] = None
+                _save_cache()
+            else:
+                STATE['error'] = f'{mode} : aucune carte lisible, données précédentes conservées'
+            STATE['status'] = 'ready'
     except Exception as exc:
         with LOCK:
-            STATE.update(status='error', error=f'{type(exc).__name__}: {str(exc)[:220]}',
-                         updated_at=dt.datetime.now(dt.timezone.utc).isoformat())
-        print('[TRUCKY MONDIAL]', repr(exc), flush=True)
+            STATE['error'] = f'{mode} : {type(exc).__name__}: {str(exc)[:160]}'
+            STATE['status'] = 'ready'
+        print('[TRUCKY MONDIAL]', mode, repr(exc), flush=True)
+    finally:
+        with LOCK:
+            RUNNING = False
 
 
 def snapshot():
-    global LAST_ATTEMPT
+    global RUNNING, NEXT_ATTEMPT, NEXT_INDEX
     with LOCK:
-        if STATE['status'] != 'loading' and time.time() - LAST_ATTEMPT > 3600:
-            LAST_ATTEMPT = time.time()
-            STATE['status'] = 'loading'
-            threading.Thread(target=_worker, daemon=True, name='trucky-world').start()
-        return dict(STATE)
+        now = time.monotonic()
+        if not RUNNING and now >= NEXT_ATTEMPT:
+            index = NEXT_INDEX
+            NEXT_INDEX = (NEXT_INDEX + 1) % len(MODES)
+            NEXT_ATTEMPT = now + max(90, INTERVAL)
+            RUNNING = True
+            STATE['status'] = 'loading' if not any(c['verified'] for c in STATE['categories']) else 'ready'
+            threading.Thread(target=_worker, args=(index,), daemon=True,
+                             name='trucky-world-one').start()
+        # Copie isolée pour les réponses HTTP pendant la mise à jour du cache.
+        return json.loads(json.dumps(STATE, ensure_ascii=False))
+
+
+_restore_cache()
