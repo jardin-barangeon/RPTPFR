@@ -7,7 +7,7 @@ ROOT=Path(__file__).parent
 CONFIG=ROOT/'config.json'
 HTML=(ROOT/'index.html').read_bytes()
 # Cache commun aux requetes pour eviter de surcharger Trucky.
-_world_cache = {'key': None, 'at': 0, 'data': None}
+_world_cache = {}
 _world_lock = threading.Lock()
 
 def safe_int(value):
@@ -16,13 +16,16 @@ def safe_int(value):
     except (ValueError, TypeError, OverflowError):
         return 0
 
-def get_world_leaderboard():
+def get_world_leaderboard(stats_type="transport_system"):
+    if stats_type not in ("transport_system", "real_miles"):
+        raise ValueError("Catégorie Trucky invalide")
     now = datetime.datetime.now(datetime.timezone.utc)
-    key = (now.year, now.month)
+    key = (now.year, now.month, stats_type)
     with _world_lock:
-        if _world_cache['key'] == key and _world_cache['data'] is not None and time.monotonic() - _world_cache['at'] < 300:
-            return _world_cache['data']
-        params = urllib.parse.urlencode({'country_code': '', 'game': 1, 'stats_type': 'transport_system',
+        cached = _world_cache.get(key)
+        if cached and time.monotonic() - cached['at'] < 300:
+            return cached['data']
+        params = urllib.parse.urlencode({'country_code': '', 'game': 1, 'stats_type': stats_type,
                                          'month': now.month, 'year': now.year, 'page': 1, 'perPage': 18})
         req = urllib.request.Request('https://e.truckyapp.com/api/v1/companies/leaderboards?' + params,
                                      headers={'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 RPTPFR/1.0'})
@@ -42,10 +45,10 @@ def get_world_leaderboard():
                             'avatar_url': company.get('avatar_url'),
                             'flag_url': company.get('flag_url'),
                             'public_url': company.get('public_url')})
-        result = {'month': now.month, 'year': now.year, 'companies': entries,
+        result = {'month': now.month, 'year': now.year, 'stats_type': stats_type, 'companies': entries,
                   'total': safe_int(payload.get('total')),
                   'updated_at': now.isoformat()}
-        _world_cache.update(key=key, at=time.monotonic(), data=result)
+        _world_cache[key] = {'at': time.monotonic(), 'data': result}
         return result
 
 def pick(obj,*keys):
@@ -370,7 +373,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
         path=self.path.split('?')[0]
         if path=='/api/trucky/company-leaderboard':
             try:
-                return self.json_response(200, get_world_leaderboard())
+                query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+                category = query.get('stats_type', ['transport_system'])[0]
+                if category not in ('transport_system', 'real_miles'):
+                    return self.json_response(400, {'error':'Catégorie inconnue'})
+                return self.json_response(200, get_world_leaderboard(category))
             except Exception as exc:
                 print('[CLASSEMENT TRUCKY]', repr(exc), flush=True)
                 return self.json_response(502, {'error':'Classement Trucky temporairement indisponible'})
