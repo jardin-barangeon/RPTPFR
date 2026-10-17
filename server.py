@@ -10,6 +10,12 @@ HTML=(ROOT/'index.html').read_bytes()
 _world_cache = {'key': None, 'at': 0, 'data': None}
 _world_lock = threading.Lock()
 
+def safe_int(value):
+    try:
+        return max(0, int(value or 0))
+    except (ValueError, TypeError, OverflowError):
+        return 0
+
 def get_world_leaderboard():
     now = datetime.datetime.now(datetime.timezone.utc)
     key = (now.year, now.month)
@@ -407,9 +413,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         try: count=int(loc.get('trafficJams') or 0)
                         except (ValueError,TypeError):continue
                         if count<=0:continue
-                        def safe_int(value):
-                            try:return max(0,int(value or 0))
-                            except (ValueError,TypeError):return 0
                         jams.append({
                             'name':str(loc.get('name') or 'Zone inconnue')[:150],
                             'country':str(country.get('country') or loc.get('country') or 'Inconnu')[:100],
