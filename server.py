@@ -1,4 +1,4 @@
-import json, os, urllib.request, urllib.error, datetime, http.server, socketserver
+import json, os, urllib.request, urllib.error, urllib.parse, datetime, http.server, socketserver, time, threading
 import challenges
 import scs_news
 import world_trucky
@@ -6,6 +6,42 @@ from pathlib import Path
 ROOT=Path(__file__).parent
 CONFIG=ROOT/'config.json'
 HTML=(ROOT/'index.html').read_bytes()
+# Cache commun aux requetes pour eviter de surcharger Trucky.
+_world_cache = {'key': None, 'at': 0, 'data': None}
+_world_lock = threading.Lock()
+
+def get_world_leaderboard():
+    now = datetime.datetime.now(datetime.timezone.utc)
+    key = (now.year, now.month)
+    with _world_lock:
+        if _world_cache['key'] == key and _world_cache['data'] is not None and time.monotonic() - _world_cache['at'] < 300:
+            return _world_cache['data']
+        params = urllib.parse.urlencode({'country_code': '', 'game': 1, 'stats_type': 'transport_system',
+                                         'month': now.month, 'year': now.year, 'page': 1, 'perPage': 18})
+        req = urllib.request.Request('https://e.truckyapp.com/api/v1/companies/leaderboards?' + params,
+                                     headers={'Accept': 'application/json', 'User-Agent': 'Mozilla/5.0 RPTPFR/1.0'})
+        with urllib.request.urlopen(req, timeout=18) as response:
+            payload = json.load(response)
+        if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+            raise ValueError('Format du classement Trucky inattendu')
+        entries = []
+        for company in payload['data']:
+            if not isinstance(company, dict):
+                continue
+            entries.append({'id': company.get('company_id') or company.get('id'),
+                            'name': str(company.get('name') or 'Entreprise')[:140],
+                            'position': safe_int(company.get('position')),
+                            'driven_distance': safe_int(company.get('driven_distance')),
+                            'distance_unit': company.get('distance_unit') or 'km',
+                            'avatar_url': company.get('avatar_url'),
+                            'flag_url': company.get('flag_url'),
+                            'public_url': company.get('public_url')})
+        result = {'month': now.month, 'year': now.year, 'companies': entries,
+                  'total': safe_int(payload.get('total')),
+                  'updated_at': now.isoformat()}
+        _world_cache.update(key=key, at=time.monotonic(), data=result)
+        return result
+
 def pick(obj,*keys):
     for key in keys:
         cur=obj
@@ -326,6 +362,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/api/trucky/company-leaderboard':
+            try:
+                return self.json_response(200, get_world_leaderboard())
+            except Exception as exc:
+                print('[CLASSEMENT TRUCKY]', repr(exc), flush=True)
+                return self.json_response(502, {'error':'Classement Trucky temporairement indisponible'})
         if path=='/api/world-rankings':
             return self.json_response(200,world_trucky.snapshot())
         if path=='/api/company-announcements':
