@@ -346,6 +346,43 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except Exception as exc:
                 print(f'SCS NEWS: {type(exc).__name__}: {exc}', flush=True)
                 return self.json_response(502,{'error':'Actualités ETS2 indisponibles : consulter les logs Render (SCS NEWS)'})
+        if path=='/api/trucky/traffic':
+            # Proxy serveur : evite les restrictions CORS du navigateur.
+            try:
+                request=urllib.request.Request(
+                    'https://api.truckyapp.com/v2/traffic?game=ets2&server=sim1',
+                    headers={'Accept':'application/json','User-Agent':'RPTPFR-Dashboard/1.0'})
+                with urllib.request.urlopen(request,timeout=15) as response:
+                    payload=json.load(response)
+                countries=payload.get('response') if isinstance(payload,dict) else None
+                if not isinstance(countries,list):
+                    raise ValueError('Format de reponse Trucky inattendu')
+                jams=[]
+                for country in countries:
+                    if not isinstance(country,dict):continue
+                    for loc in country.get('locations',[]):
+                        if not isinstance(loc,dict):continue
+                        try: count=int(loc.get('trafficJams') or 0)
+                        except (ValueError,TypeError):continue
+                        if count<=0:continue
+                        def safe_int(value):
+                            try:return max(0,int(value or 0))
+                            except (ValueError,TypeError):return 0
+                        jams.append({
+                            'name':str(loc.get('name') or 'Zone inconnue')[:150],
+                            'country':str(country.get('country') or loc.get('country') or 'Inconnu')[:100],
+                            'trafficJams':count,
+                            'players':safe_int(loc.get('players')),
+                            'playersInvolvedInTrafficJams':safe_int(loc.get('playersInvolvedInTrafficJams'))})
+                jams.sort(key=lambda x:(-x['playersInvolvedInTrafficJams'],-x['trafficJams'],x['country'],x['name']))
+                return self.json_response(200,{'game':'ets2','server':'sim1','jams':jams,'count':len(jams),
+                                               'updatedAt':datetime.datetime.now(datetime.timezone.utc).isoformat()})
+            except (urllib.error.URLError,TimeoutError,ValueError,KeyError) as exc:
+                print('TRUCKY TRAFFIC:',repr(exc),flush=True)
+                return self.json_response(502,{'error':'Donnees de circulation Trucky temporairement indisponibles'})
+            except Exception as exc:
+                print('TRUCKY TRAFFIC:',repr(exc),flush=True)
+                return self.json_response(502,{'error':'Impossible de recuperer les embouteillages Trucky'})
         if path=='/api/truckersmp/servers':
             try:
                 request=urllib.request.Request('https://api.truckersmp.com/v2/servers',headers={'Accept':'application/json','User-Agent':'RPTPFR-Dashboard/1.0'})
