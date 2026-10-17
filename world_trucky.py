@@ -60,72 +60,67 @@ CARD_JS = r"""() => {
 
 
 def _select_mode(page, mode):
-    """Pilote le menu Truck Mode (dropdown JS) sans supposer un bouton par mode."""
-    # Trucky affiche le mode courant dans un sélecteur; son texte initial est
-    # généralement « Transport public ». Les options sont visibles après clic.
-    # On s'appuie sur la structure réelle des éléments cliquables, pas sur
-    # get_by_role('button', name='Total|...') qui échouait.
-    result = page.evaluate(r"""(target) => {
-      const names = ['Total', 'Distance (Réel)', 'Distance (Course)',
-                     'WOTR', 'TruckersMP', 'Transport public'];
-      const clean = x => (x || '').replace(/\s+/g, ' ').trim();
-      const visible = e => !!(e.getClientRects().length) &&
-        getComputedStyle(e).visibility !== 'hidden';
-      const candidates = [...document.querySelectorAll('button, [role="button"], [role="combobox"], [aria-haspopup], select')]
-        .filter(visible).filter(e => names.some(n => clean(e.innerText || e.textContent) === n));
-      let trigger = candidates.find(e => e.getAttribute('aria-haspopup')) ||
-                    candidates.find(e => clean(e.innerText || e.textContent) === 'Transport public') ||
-                    candidates[0];
-      if (!trigger) {
-        const label = [...document.querySelectorAll('body *')]
-          .filter(e => visible(e) && e.children.length === 0 &&
-                       names.some(n => clean(e.textContent) === n))
-          .find(e => clean(e.textContent) === 'Transport public');
-        trigger = label && (label.closest('button,[role="button"],[role="combobox"],[aria-haspopup]') || label.parentElement);
-      }
-      if (!trigger) return {ok:false, reason:'Sélecteur Truck Mode introuvable'};
+    """Choisit Truck Mode dans le menu personnalisé, sans bouton Rechercher."""
+    # Les libellés sont des éléments du menu, pas nécessairement des boutons.
+    # Déterminer le déclencheur par sa proximité avec « Truck Mode ».
+    details = page.evaluate(r"""(target) => {
+      const modes = ['Total','Distance (Réel)','Distance (Course)','WOTR','TruckersMP','Transport public'];
+      const clean = x => (x || '').replace(/\s+/g,' ').trim();
+      const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+      const leaf = [...document.querySelectorAll('body *')].filter(e => visible(e) &&
+        e.children.length === 0 && modes.includes(clean(e.textContent)));
+      const labelled = [...document.querySelectorAll('body *')].find(e => visible(e) &&
+        e.children.length === 0 && clean(e.textContent) === 'Truck Mode');
+      const choices = leaf.filter(e => {
+        const clickable = e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]');
+        return !!clickable;
+      });
+      const near = labelled && labelled.parentElement && labelled.parentElement.parentElement;
+      let trigger = near && [...near.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
+        .find(e => modes.includes(clean(e.innerText || e.textContent)));
+      if (!trigger) trigger = choices.map(e => e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]'))
+        .find(e => modes.includes(clean(e.innerText || e.textContent)) &&
+          (e.getAttribute('aria-haspopup') || e.getAttribute('role') === 'combobox'));
+      if (!trigger) trigger = choices.map(e => e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]'))[0];
+      if (!trigger) return {ok:false,reason:'Déclencheur Truck Mode introuvable'};
       const current = clean(trigger.innerText || trigger.textContent);
-      if (current === target) return {ok:true, current, already:true};
-      trigger.click();
-      return {ok:true, current, already:false};
+      if (current !== target) trigger.click();
+      return {ok:true,already:current === target,current};
     }""", mode)
-    if not result.get('ok'):
-        raise RuntimeError(result.get('reason', 'Sélecteur Truck Mode indisponible'))
-    if not result.get('already'):
-        page.wait_for_timeout(350)
+    if not details.get('ok'):
+        raise RuntimeError(details.get('reason', 'Truck Mode inaccessible'))
+    if not details.get('already'):
+        page.wait_for_timeout(300)
         selected = page.evaluate(r"""(target) => {
-          const clean = x => (x || '').replace(/\s+/g, ' ').trim();
-          const visible = e => !!e.getClientRects().length &&
-            getComputedStyle(e).visibility !== 'hidden';
-          const opts = [...document.querySelectorAll('[role="option"], [role="menuitem"], li, button, a, div, span')]
-            .filter(e => visible(e) && clean(e.innerText || e.textContent) === target)
-            .sort((a,b) => (a.children.length - b.children.length));
-          const item = opts.find(e => e.closest('[role="listbox"],[role="menu"],ul')) || opts[0];
-          if (!item) return false;
-          (item.closest('[role="option"],[role="menuitem"],li,button,a') || item).click();
+          const clean = x => (x || '').replace(/\s+/g,' ').trim();
+          const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+          const nodes = [...document.querySelectorAll('body *')].filter(e => visible(e) &&
+            e.children.length === 0 && clean(e.textContent) === target);
+          const option = nodes.map(e => e.closest('[role="option"],[role="menuitem"],li,button,a') || e)
+            .find(e => visible(e));
+          if (!option) return false;
+          option.click();
           return true;
         }""", mode)
         if not selected:
             raise RuntimeError(f'Option Truck Mode introuvable : {mode}')
-        page.wait_for_timeout(250)
-    # Le changement de Truck Mode actualise Trucky automatiquement :
-    # le bouton « Rechercher » concerne d'autres filtres, pas ce menu.
-    # Laisser l'interface charger les cartes de la catégorie sélectionnée.
+    # Attendre que le libellé du mode soit celui du sélecteur fermé. Ne pas
+    # attribuer le tableau de la catégorie précédente au nouveau mode.
     try:
-        page.wait_for_load_state('networkidle', timeout=9000)
-    except Exception:
-        pass  # Certains appels de télémétrie empêchent networkidle.
-    page.wait_for_timeout(1100)
-    # Vérifier le libellé affiché dans le sélecteur avant d'attribuer les
-    # données à la catégorie, sans cliquer sur un bouton inexistant.
-    confirmed = page.evaluate(r"""(target) => {
-      const clean = x => (x || '').replace(/\s+/g, ' ').trim();
-      const visible = e => !!e.getClientRects().length;
-      return [...document.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
-        .some(e => visible(e) && clean(e.innerText || e.textContent) === target);
-    }""", mode)
-    if not confirmed:
-        raise RuntimeError(f'Filtre {mode} non confirmé après sélection')
+        page.wait_for_function(r"""(target) => {
+          const clean = x => (x || '').replace(/\s+/g,' ').trim();
+          const visible = e => !!e.getClientRects().length;
+          const modes = ['Total','Distance (Réel)','Distance (Course)','WOTR','TruckersMP','Transport public'];
+          const label = [...document.querySelectorAll('body *')].find(e =>
+            visible(e) && e.children.length === 0 && clean(e.textContent) === 'Truck Mode');
+          if (!label) return false;
+          const near = label.parentElement && label.parentElement.parentElement;
+          return !!near && [...near.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
+            .some(e => visible(e) && clean(e.innerText || e.textContent) === target);
+        }""", mode, timeout=6000)
+    except Exception as exc:
+        raise RuntimeError(f'Sélection de {mode} non confirmée : {str(exc)[:90]}') from exc
+    page.wait_for_timeout(1800)
 
 
 def _read_one(mode):
@@ -139,7 +134,16 @@ def _read_one(mode):
             page.goto(START_URL, wait_until='domcontentloaded', timeout=20000)
             page.wait_for_timeout(1600)
             _select_mode(page, mode)
-            cards = page.evaluate(CARD_JS)
+            cards = []
+            for _ in range(8):
+                cards = page.evaluate(CARD_JS)
+                if cards:
+                    break
+                page.wait_for_timeout(700)
+            if not cards:
+                print('[TRUCKY MONDIAL]', mode,
+                      'aucune carte détectée ; URL:', page.url,
+                      'titre:', page.title(), flush=True)
             # Le rang est déjà fourni par le HTML de la page d'accueil.
             top = [f"{c['name']} — {c['distance']}" for c in cards if c['rank'] <= 10][:10]
             own = next((c for c in cards if 'RPTPFR' in c['name'].upper()

@@ -45,12 +45,12 @@ def daily_embed(jobs, kind, day):
     }
 
 
-def challenge_embeds(jobs, yesterday):
+def challenge_embeds(jobs, report_date):
     """Uniquement les challenges en cours, classement collectif complet."""
-    day = yesterday.isoformat()
+    day = report_date.isoformat()
     output = []
     for c in challenges.list_challenges():
-        if not c['active'] or not (c['start_date'] <= yesterday <= c['end_date']):
+        if not c['active'] or not (c['start_date'] <= report_date <= c['end_date']):
             continue
         subset = [j for j in jobs
                   if c['start_date'].isoformat() <= str(j.get('date') or '')[:10] <= day
@@ -106,8 +106,10 @@ def main(force=False):
         raise RuntimeError('DISCORD_WEBHOOK_URL manquant ou invalide sur le Web Service Render')
     if not token:
         raise RuntimeError('TRUCKY_TOKEN manquant sur le Web Service Render')
-    yesterday = now.date() - datetime.timedelta(days=1)
-    day = yesterday.isoformat()
+    # Le bouton admin envoie une photographie du mois en cours à l'instant T.
+    # L'envoi automatique à midi reste volontairement arrêté à la veille.
+    report_date = now.date() if force else now.date() - datetime.timedelta(days=1)
+    day = report_date.isoformat()
     challenges.setup()
     # Le verrou est gardé pendant tout l'envoi, afin d'éviter deux messages
     # si Render démarre plusieurs processus/instances en même temps.
@@ -117,7 +119,7 @@ def main(force=False):
         if not acquired:
             print('Un autre processus prépare déjà le rapport.', flush=True)
             return False
-        if not force and conn.execute('SELECT 1 FROM discord_daily_reports WHERE report_day=%s', (yesterday,)).fetchone():
+        if not force and conn.execute('SELECT 1 FROM discord_daily_reports WHERE report_day=%s', (report_date,)).fetchone():
             print('Rapport déjà envoyé pour', day, flush=True)
             return False
         fetched = fetch_all(token)
@@ -125,17 +127,19 @@ def main(force=False):
         print('Missions récupérées :', len(jobs), '| avertissement :', fetched.get('warning') or 'aucun', flush=True)
         embeds = [daily_embed(jobs, 'camion', day), daily_embed(jobs, 'bus', day)]
         try:
-            embeds.extend(challenge_embeds(jobs, yesterday))
+            embeds.extend(challenge_embeds(jobs, report_date))
         except Exception as exc:
             # Un problème sur les challenges ne doit pas empêcher les deux classements.
             print('Bilan challenges indisponible :', repr(exc), flush=True)
-        content = (f'📊 **TOP 5 mensuel CAMION / BUS RPTPFR — {yesterday.strftime("%m/%Y")}**'
-                   f'\n*Cumul du 01/{yesterday.strftime("%m/%Y")} au {yesterday.strftime("%d/%m/%Y")} inclus*')
+        content = (f'📊 **TOP 5 mensuel CAMION / BUS RPTPFR — {report_date.strftime("%m/%Y")}**'
+                   f'\n*Cumul du 01/{report_date.strftime("%m/%Y")} au {report_date.strftime("%d/%m/%Y")} inclus*')
+        if force:
+            content += '\n*Envoi manuel depuis l’administration • données du mois jusqu’à aujourd’hui*'
         if fetched.get('warning'):
             content += '\n⚠️ Historique Trucky possiblement incomplet : classements indicatifs.'
         post_discord(webhook, content, embeds)
         if not force:
-            conn.execute('INSERT INTO discord_daily_reports(report_day) VALUES (%s) ON CONFLICT DO NOTHING', (yesterday,))
+            conn.execute('INSERT INTO discord_daily_reports(report_day) VALUES (%s) ON CONFLICT DO NOTHING', (report_date,))
         conn.commit()
     print('TOP 5 mensuels BUS/CAMION envoyés, arrêtés au', day, flush=True)
     return True
