@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 TRAFFIC_URL = 'https://api.truckyapp.com/v2/traffic?game=ets2&server=sim1'
 PARIS = ZoneInfo('Europe/Paris')
 POLL_SECONDS = 120
+MIN_PLAYERS_ALERT = 20
 
 
 def fetch_jams():
@@ -35,7 +36,9 @@ def fetch_jams():
                 players = max(0, int(loc.get('playersInvolvedInTrafficJams') or 0))
             except (ValueError, TypeError):
                 continue
-            if not count:
+            # Ne conserver que les bouchons impliquant au moins 20 joueurs.
+            # Les alertes précédemment publiées sont supprimées dès que le seuil n’est plus atteint.
+            if not count or players < MIN_PLAYERS_ALERT:
                 continue
             country = str(group.get('country') or loc.get('country') or 'Pays inconnu')[:80]
             name = str(loc.get('name') or 'Zone inconnue')[:120]
@@ -54,15 +57,34 @@ def discord_request(url, method, body=None):
 
 
 def payload(zone):
+    """Une fiche lisible par zone, avec niveau de trafic selon les joueurs concernés."""
     now = datetime.datetime.now(PARIS)
-    desc = ('**📍 Secteur :** {name}\n**🌍 Pays :** {country}\n'
-            '**🚧 Embouteillage(s) :** {count}\n**🚗 Joueurs concernés :** {players}\n'
-            '**🎮 Serveur :** ETS2 — Simulation 1\n**🕒 Actualisé à :** {hour} (Paris)').format(
-                **zone, hour=now.strftime('%H:%M:%S'))
-    return {'username': 'ЯPTPFR • Info Trafic', 'allowed_mentions': {'parse': []},
-            'embeds': [{'title': '🚨 BOUCHON EN COURS', 'description': desc, 'color': 0xE34B4B,
-                        'footer': {'text': 'Info trafic en direct • Source : Trucky • ЯPTPFR'},
-                        'timestamp': now.isoformat()}]}
+    players = zone['players']
+    if players > 50:
+        level, color, symbol = 'TRAFIC IMPORTANT', 0xE53935, '🔴'
+    elif players >= 20:
+        level, color, symbol = 'TRAFIC MODÉRÉ', 0xF4B400, '🟠'
+    else:
+        level, color, symbol = 'TRAFIC FAIBLE', 0x39A86B, '🟢'
+    # Discord n'a pas de vrai tableau HTML : l'embed utilise des champs alignés.
+    return {
+        'username': 'ЯPTPFR • Info Trafic',
+        'allowed_mentions': {'parse': []},
+        'embeds': [{
+            'title': f"{symbol} {zone['name']} — {level}",
+            'color': color,
+            'fields': [
+                {'name': '📍 Ville / secteur', 'value': zone['name'], 'inline': True},
+                {'name': '🌍 Pays', 'value': zone['country'], 'inline': True},
+                {'name': '🚗 Joueurs dans le bouchon', 'value': str(players), 'inline': True},
+                {'name': '🚧 Bouchons détectés', 'value': str(zone['count']), 'inline': True},
+                {'name': '🚦 État du trafic', 'value': f'{symbol} **{level}**', 'inline': True},
+                {'name': '🕒 Actualisation (Paris)', 'value': now.strftime('%H:%M:%S'), 'inline': True},
+            ],
+            'footer': {'text': 'ETS2 • Simulation 1 | Source : Trucky | ЯPTPFR'},
+            'timestamp': now.isoformat(),
+        }],
+    }
 
 
 def start():
@@ -103,7 +125,7 @@ def start():
                 cur.execute('SELECT zone_key, message_id, signature FROM rptpfr_traffic_discord WHERE webhook_key=%s', (webhook_key,))
                 messages = {key: (message_id, signature) for key, message_id, signature in cur.fetchall()}
                 for key, zone in current.items():
-                    signature = json.dumps([zone['country'], zone['name'], zone['count'], zone['players']], ensure_ascii=False)
+                    signature = json.dumps(['traffic-level-v3-min20', zone['country'], zone['name'], zone['count'], zone['players']], ensure_ascii=False)
                     record = messages.get(key)
                     if record and record[1] == signature:
                         continue
@@ -147,7 +169,7 @@ def start():
                             print('[ALERTES TRAFIC] Erreur suppression Discord :', exc.code, flush=True)
                     except Exception as exc:
                         print('[ALERTES TRAFIC] Erreur suppression :', repr(exc), flush=True)
-                print('[ALERTES TRAFIC] Zones actives :', len(current), flush=True)
+                print('[ALERTES TRAFIC] Zones actives (20 joueurs minimum) :', len(current), flush=True)
 
     def worker():
         while True:
