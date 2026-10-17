@@ -558,6 +558,8 @@ if __name__=='__main__':
     host='0.0.0.0' if os.environ.get('RENDER') else '127.0.0.1'
     challenges.setup()
     start_daily_discord_scheduler()
+    import traffic_discord
+    traffic_discord.start()
     with ThreadingHTTPServer((host,port),Handler) as server:
         print(f'RPTPFR sur {host}:{port}',flush=True)
         server.serve_forever()
