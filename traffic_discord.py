@@ -77,18 +77,31 @@ def discord_request(url, method, body=None):
                 return json.loads(raw) if raw else None
         except urllib.error.HTTPError as exc:
             if exc.code == 429:
-                delay = 60.0
+                # Journalisation ciblée : ne jamais afficher l'URL secrète du webhook.
+                headers = exc.headers
+                safe_headers = {name: headers.get(name) for name in (
+                    'Retry-After', 'X-RateLimit-Reset-After', 'X-RateLimit-Remaining',
+                    'X-RateLimit-Limit', 'X-RateLimit-Bucket', 'X-RateLimit-Global',
+                    'X-RateLimit-Scope', 'Content-Type', 'CF-Ray') if headers.get(name)}
+                raw = exc.read(4096).decode('utf-8', 'replace')
+                parsed = {}
                 try:
-                    value = exc.headers.get('Retry-After')
-                    if value:
-                        delay = float(value)
-                    else:
-                        delay = float(json.loads(exc.read().decode()).get('retry_after', 60))
-                except (ValueError, TypeError, json.JSONDecodeError):
+                    value = json.loads(raw)
+                    if isinstance(value, dict):
+                        parsed = {k: value.get(k) for k in ('code', 'retry_after', 'global', 'message') if k in value}
+                except (ValueError, TypeError):
                     pass
-                delay = max(2., min(delay, 3600.))
+                delay = 60.0
+                for candidate in (headers.get('Retry-After'), headers.get('X-RateLimit-Reset-After'), parsed.get('retry_after')):
+                    try:
+                        if candidate is not None:
+                            delay = max(1.0, float(candidate))
+                            break
+                    except (ValueError, TypeError):
+                        pass
+                delay = min(delay, 86400.0)
                 _discord_next_allowed = time.monotonic() + delay + 2
-                print(f'[ALERTES TRAFIC] Discord 429 : attente {delay:.0f}s.', flush=True)
+                print(f'[TRAFIC DIAGNOSTIC 429] operation={method} endpoint={"message" if "/messages/" in url else "webhook"} headers={safe_headers} corps={parsed or "non-JSON"} attente={delay:.1f}s', flush=True)
                 raise DiscordRateLimited('Limite Discord') from exc
             raise
 
@@ -171,8 +184,9 @@ def start():
                 table_key = '__rptpfr_cities_overview__'
                 previous_table = messages.pop(table_key, None)
                 table_signature = json.dumps(cities, ensure_ascii=False, sort_keys=True)
-                if cities:
-                    # Mise à jour même sans variation, afin de rafraîchir l'heure affichée.
+                if cities and previous_table and previous_table[1] == table_signature:
+                    pass  # Pas de PATCH inutile si la liste des villes n'a pas changé.
+                elif cities:
                     try:
                         body = cities_payload(cities)
                         writes += 1
