@@ -5,6 +5,7 @@ import datetime
 import json
 import os
 import urllib.request
+import urllib.error
 from zoneinfo import ZoneInfo
 
 import challenges
@@ -88,9 +89,15 @@ def post_discord(webhook, content, embeds):
                    'embeds': embeds[offset:offset+10], 'allowed_mentions': {'parse': []}}
         req = urllib.request.Request(webhook, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
                                      headers={'Content-Type': 'application/json', 'User-Agent': 'RPTPFR-Daily/2.0'}, method='POST')
-        with urllib.request.urlopen(req, timeout=30) as response:
-            if response.status not in (200, 204):
-                raise RuntimeError('Discord HTTP ' + str(response.status))
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status not in (200, 204):
+                    raise RuntimeError('Discord HTTP ' + str(response.status))
+        except urllib.error.HTTPError as exc:
+            print('[CLASSEMENT DISCORD] HTTP', exc.code,
+                  'retry_after=', exc.headers.get('Retry-After'),
+                  'content_type=', exc.headers.get('Content-Type'), flush=True)
+            raise
 
 
 def main(force=False):
