@@ -9,6 +9,7 @@ import urllib.parse
 import urllib.request
 import hashlib
 import psycopg
+import discord_guard
 from zoneinfo import ZoneInfo
 
 TRAFFIC_URL = 'https://api.truckyapp.com/v2/traffic?game=ets2&server=sim1'
@@ -100,7 +101,8 @@ def discord_request(url, method, body=None):
                     except (ValueError, TypeError):
                         pass
                 delay = min(delay, 86400.0)
-                _discord_next_allowed = time.monotonic() + delay + 2
+                delay = discord_guard.register_429(exc)
+                _discord_next_allowed = time.monotonic() + delay + 3
                 print(f'[TRAFIC DIAGNOSTIC 429] operation={method} endpoint={"message" if "/messages/" in url else "webhook"} headers={safe_headers} corps={parsed or "non-JSON"} attente={delay:.1f}s', flush=True)
                 raise DiscordRateLimited('Limite Discord') from exc
             raise
@@ -159,8 +161,9 @@ def start():
     def sync_once():
         # Trucky est consulté avant toute suppression : une panne n'efface rien.
         current, cities = fetch_snapshot()
-        if time.monotonic() < _discord_next_allowed:
-            print('[ALERTES TRAFIC] Pause Discord en cours.', flush=True)
+        wait = discord_guard.remaining()
+        if wait or time.monotonic() < _discord_next_allowed:
+            print(f'[ALERTES TRAFIC] Pause Discord : encore {max(wait, int(_discord_next_allowed-time.monotonic()))}s.', flush=True)
             return
         writes = 0
         with psycopg.connect(database_url, connect_timeout=10) as conn:

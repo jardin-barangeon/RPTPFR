@@ -6,6 +6,7 @@ import json
 import os
 import urllib.request
 import urllib.error
+import discord_guard
 from zoneinfo import ZoneInfo
 
 import challenges
@@ -89,14 +90,16 @@ def post_discord(webhook, content, embeds):
                    'embeds': embeds[offset:offset+10], 'allowed_mentions': {'parse': []}}
         req = urllib.request.Request(webhook, data=json.dumps(payload, ensure_ascii=False).encode('utf-8'),
                                      headers={'Content-Type': 'application/json', 'User-Agent': 'RPTPFR-Daily/2.0'}, method='POST')
+        wait = discord_guard.remaining()
+        if wait:
+            raise RuntimeError(f'Discord en pause : encore {wait}s')
         try:
             with urllib.request.urlopen(req, timeout=30) as response:
                 if response.status not in (200, 204):
                     raise RuntimeError('Discord HTTP ' + str(response.status))
         except urllib.error.HTTPError as exc:
-            print('[CLASSEMENT DISCORD] HTTP', exc.code,
-                  'retry_after=', exc.headers.get('Retry-After'),
-                  'content_type=', exc.headers.get('Content-Type'), flush=True)
+            if exc.code == 429:
+                discord_guard.register_429(exc)
             raise
 
 
@@ -113,6 +116,9 @@ def main(force=False):
         raise RuntimeError('DISCORD_WEBHOOK_URL manquant ou invalide sur le Web Service Render')
     if not token:
         raise RuntimeError('TRUCKY_TOKEN manquant sur le Web Service Render')
+    wait = discord_guard.remaining()
+    if wait:
+        raise RuntimeError(f'Discord en pause : encore {wait}s')
     # Le bouton admin envoie une photographie du mois en cours à l'instant T.
     # L'envoi automatique à midi reste volontairement arrêté à la veille.
     report_date = now.date() if force else now.date() - datetime.timedelta(days=1)

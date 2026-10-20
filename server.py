@@ -311,10 +311,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         return self.json_response(409,{'error':'Rapport en cours de préparation : réessaie dans quelques instants.'})
                     return self.json_response(200,{'ok':True,'message':'TOP 5 mensuels BUS/CAMION transmis à Discord (cumul arrêté à hier). L’envoi automatique de midi reste actif.'})
                 except urllib.error.HTTPError as exc:
-                    print('[TEST CLASSEMENT DISCORD] HTTP', exc.code, 'retry_after=', exc.headers.get('Retry-After'), 'content_type=', exc.headers.get('Content-Type'), flush=True)
+                    print('[TEST CLASSEMENT DISCORD] HTTP', exc.code, flush=True)
                     return self.json_response(502,{'error':'Discord ou Trucky a répondu HTTP '+str(exc.code)})
                 except Exception as exc:
-                    print('[TEST CLASSEMENT DISCORD] Échec :', type(exc).__name__, str(exc)[:350], flush=True)
+                    print('[TEST CLASSEMENT DISCORD] Échec :', repr(exc), flush=True)
                     return self.json_response(503,{'error':'Envoi impossible. Consulte les logs Render pour connaître la cause.'})
             if path=='/api/admin/discord-message' and method=='POST':
                 message=data.get('message','')
@@ -368,9 +368,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:return self.json_response(405,{'error':'Méthode non autorisée'})
             return self.json_response(200,{'ok':True})
         except (ValueError,KeyError,TypeError,OverflowError) as e:return self.json_response(400,{'error':str(e)})
-        except Exception as exc:
-            print('[ADMIN ERREUR] route=', path, 'type=', type(exc).__name__, 'detail=', str(exc)[:350], flush=True)
-            return self.json_response(503,{'error':'Opération indisponible. Consulte les logs Render : ADMIN ERREUR.'})
+        except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
     def do_HEAD(self):
         if self.path.split('?')[0] in ('/', '/index.html'):
             self.send_response(200)
