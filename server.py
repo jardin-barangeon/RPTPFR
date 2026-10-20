@@ -369,6 +369,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.json_response(200,{'ok':True})
         except (ValueError,KeyError,TypeError,OverflowError) as e:return self.json_response(400,{'error':str(e)})
         except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
+    def do_HEAD(self):
+        if self.path.split('?')[0] in ('/', '/index.html'):
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(HTML)))
+            self.end_headers()
+        else:
+            self.send_response(404)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+
     def do_GET(self):
         path=self.path.split('?')[0]
         if path=='/api/trucky/company-leaderboard':

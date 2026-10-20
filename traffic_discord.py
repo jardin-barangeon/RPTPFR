@@ -14,6 +14,13 @@ from zoneinfo import ZoneInfo
 TRAFFIC_URL = 'https://api.truckyapp.com/v2/traffic?game=ets2&server=sim1'
 PARIS = ZoneInfo('Europe/Paris')
 POLL_SECONDS = 120
+MAX_DISCORD_WRITES = 8
+_discord_next_allowed = 0.0
+_discord_lock = threading.Lock()
+
+class DiscordRateLimited(Exception):
+    pass
+
 
 
 def fetch_snapshot():
@@ -55,12 +62,35 @@ def fetch_snapshot():
 
 
 def discord_request(url, method, body=None):
-    data = None if body is None else json.dumps(body, ensure_ascii=False).encode('utf-8')
-    req = urllib.request.Request(url, data=data, method=method,
-        headers={'Content-Type': 'application/json', 'User-Agent': 'RPTPFR-Traffic-Alerts/2.0'})
-    with urllib.request.urlopen(req, timeout=15) as response:
-        raw = response.read()
-        return json.loads(raw) if raw else None
+    """Respecte les limites Discord et le Retry-After."""
+    global _discord_next_allowed
+    with _discord_lock:
+        remaining = _discord_next_allowed - time.monotonic()
+        if remaining > 0:
+            raise DiscordRateLimited(f"Pause Discord encore {remaining:.0f}s")
+        data = None if body is None else json.dumps(body, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(url, data=data, method=method,
+            headers={'Content-Type': 'application/json', 'User-Agent': 'RPTPFR-Traffic-Alerts/2.1'})
+        try:
+            with urllib.request.urlopen(req, timeout=15) as response:
+                raw = response.read()
+                return json.loads(raw) if raw else None
+        except urllib.error.HTTPError as exc:
+            if exc.code == 429:
+                delay = 60.0
+                try:
+                    value = exc.headers.get('Retry-After')
+                    if value:
+                        delay = float(value)
+                    else:
+                        delay = float(json.loads(exc.read().decode()).get('retry_after', 60))
+                except (ValueError, TypeError, json.JSONDecodeError):
+                    pass
+                delay = max(2., min(delay, 3600.))
+                _discord_next_allowed = time.monotonic() + delay + 2
+                print(f'[ALERTES TRAFIC] Discord 429 : attente {delay:.0f}s.', flush=True)
+                raise DiscordRateLimited('Limite Discord') from exc
+            raise
 
 
 def payload(zone):
@@ -116,6 +146,10 @@ def start():
     def sync_once():
         # Trucky est consulté avant toute suppression : une panne n'efface rien.
         current, cities = fetch_snapshot()
+        if time.monotonic() < _discord_next_allowed:
+            print('[ALERTES TRAFIC] Pause Discord en cours.', flush=True)
+            return
+        writes = 0
         with psycopg.connect(database_url, connect_timeout=10) as conn:
             with conn.cursor() as cur:
                 # Verrou PostgreSQL : une seule instance Render publie à la fois.
@@ -141,6 +175,7 @@ def start():
                     # Mise à jour même sans variation, afin de rafraîchir l'heure affichée.
                     try:
                         body = cities_payload(cities)
+                        writes += 1
                         if previous_table:
                             url = webhook + '/messages/' + urllib.parse.quote(previous_table[0], safe='')
                             try:
@@ -161,27 +196,41 @@ def start():
                             VALUES (%s,%s,%s,%s) ON CONFLICT (webhook_key,zone_key)
                             DO UPDATE SET message_id=EXCLUDED.message_id, signature=EXCLUDED.signature""",
                             (webhook_key, table_key, table_id, table_signature))
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except Exception as exc:
                         print('[TRAFIC VILLES] Erreur actualisation du tableau :', repr(exc), flush=True)
                 elif previous_table:
                     try:
+                        writes += 1
                         discord_request(webhook + '/messages/' + urllib.parse.quote(previous_table[0], safe=''), 'DELETE')
                         cur.execute('DELETE FROM rptpfr_traffic_discord WHERE webhook_key=%s AND zone_key=%s',
                                     (webhook_key, table_key))
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except urllib.error.HTTPError as exc:
                         if exc.code == 404:
                             cur.execute('DELETE FROM rptpfr_traffic_discord WHERE webhook_key=%s AND zone_key=%s',
                                         (webhook_key, table_key))
                         else:
                             print('[TRAFIC VILLES] Erreur suppression tableau :', exc.code, flush=True)
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except Exception as exc:
                         print('[TRAFIC VILLES] Erreur suppression tableau :', repr(exc), flush=True)
                 for key, zone in current.items():
+                    if writes >= MAX_DISCORD_WRITES or time.monotonic() < _discord_next_allowed:
+                        print('[ALERTES TRAFIC] Suite des modifications au prochain passage.', flush=True)
+                        break
                     signature = json.dumps([zone['country'], zone['name'], zone['count'], zone['players']], ensure_ascii=False)
                     record = messages.get(key)
                     if record and record[1] == signature:
                         continue
                     body = payload(zone)
+                    writes += 1
                     try:
                         if record:
                             url = webhook + '/messages/' + urllib.parse.quote(record[0], safe='')
@@ -200,25 +249,42 @@ def start():
                         if record:
                             cur.execute('UPDATE rptpfr_traffic_discord SET signature=%s WHERE webhook_key=%s AND zone_key=%s',
                                         (signature, webhook_key, key))
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except urllib.error.HTTPError as exc:
                         if record and exc.code == 404:
                             cur.execute('DELETE FROM rptpfr_traffic_discord WHERE webhook_key=%s AND zone_key=%s', (webhook_key, key))
                         print('[ALERTES TRAFIC] Erreur Discord :', exc.code, flush=True)
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except Exception as exc:
                         print('[ALERTES TRAFIC] Erreur notification :', repr(exc), flush=True)
+                if time.monotonic() < _discord_next_allowed:
+                    return
                 for key, (message_id, _) in messages.items():
+                    if writes >= MAX_DISCORD_WRITES or time.monotonic() < _discord_next_allowed:
+                        break
                     if key in current:
                         continue
                     try:
                         url = webhook + '/messages/' + urllib.parse.quote(message_id, safe='')
+                        writes += 1
                         discord_request(url, 'DELETE')
                         cur.execute('DELETE FROM rptpfr_traffic_discord WHERE webhook_key=%s AND zone_key=%s', (webhook_key, key))
                         print('[ALERTES TRAFIC] Bouchon terminé : message supprimé :', key, flush=True)
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except urllib.error.HTTPError as exc:
                         if exc.code == 404:
                             cur.execute('DELETE FROM rptpfr_traffic_discord WHERE webhook_key=%s AND zone_key=%s', (webhook_key, key))
                         else:
                             print('[ALERTES TRAFIC] Erreur suppression Discord :', exc.code, flush=True)
+                    except DiscordRateLimited:
+                        print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        return
                     except Exception as exc:
                         print('[ALERTES TRAFIC] Erreur suppression :', repr(exc), flush=True)
                 print('[ALERTES TRAFIC] Zones actives :', len(current), flush=True)
