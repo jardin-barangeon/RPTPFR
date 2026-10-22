@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 TRAFFIC_URL = 'https://api.truckyapp.com/v2/traffic?game=ets2&server=sim1'
 PARIS = ZoneInfo('Europe/Paris')
 POLL_SECONDS = 120
-MAX_DISCORD_WRITES = 8
+MAX_DISCORD_WRITES = 1
 _discord_next_allowed = 0.0
 _discord_lock = threading.Lock()
 
@@ -66,6 +66,9 @@ def discord_request(url, method, body=None):
     """Respecte les limites Discord et le Retry-After."""
     global _discord_next_allowed
     with _discord_lock:
+        shared_pause = discord_guard.remaining()
+        if shared_pause:
+            raise DiscordRateLimited(f"Pause Discord encore {shared_pause}s")
         remaining = _discord_next_allowed - time.monotonic()
         if remaining > 0:
             raise DiscordRateLimited(f"Pause Discord encore {remaining:.0f}s")
@@ -189,7 +192,7 @@ def start():
                 table_signature = json.dumps(cities, ensure_ascii=False, sort_keys=True)
                 if cities and previous_table and previous_table[1] == table_signature:
                     pass  # Pas de PATCH inutile si la liste des villes n'a pas changé.
-                elif cities:
+                elif cities and writes < MAX_DISCORD_WRITES and int(time.time() // POLL_SECONDS) % 2 == 0:
                     try:
                         body = cities_payload(cities)
                         writes += 1
@@ -215,10 +218,11 @@ def start():
                             (webhook_key, table_key, table_id, table_signature))
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except Exception as exc:
                         print('[TRAFIC VILLES] Erreur actualisation du tableau :', repr(exc), flush=True)
-                elif previous_table:
+                elif not cities and previous_table and writes < MAX_DISCORD_WRITES:
                     try:
                         writes += 1
                         discord_request(webhook + '/messages/' + urllib.parse.quote(previous_table[0], safe=''), 'DELETE')
@@ -226,6 +230,7 @@ def start():
                                     (webhook_key, table_key))
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except urllib.error.HTTPError as exc:
                         if exc.code == 404:
@@ -235,6 +240,7 @@ def start():
                             print('[TRAFIC VILLES] Erreur suppression tableau :', exc.code, flush=True)
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except Exception as exc:
                         print('[TRAFIC VILLES] Erreur suppression tableau :', repr(exc), flush=True)
@@ -268,6 +274,7 @@ def start():
                                         (signature, webhook_key, key))
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except urllib.error.HTTPError as exc:
                         if record and exc.code == 404:
@@ -275,6 +282,7 @@ def start():
                         print('[ALERTES TRAFIC] Erreur Discord :', exc.code, flush=True)
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except Exception as exc:
                         print('[ALERTES TRAFIC] Erreur notification :', repr(exc), flush=True)
@@ -293,6 +301,7 @@ def start():
                         print('[ALERTES TRAFIC] Bouchon terminé : message supprimé :', key, flush=True)
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except urllib.error.HTTPError as exc:
                         if exc.code == 404:
@@ -301,6 +310,7 @@ def start():
                             print('[ALERTES TRAFIC] Erreur suppression Discord :', exc.code, flush=True)
                     except DiscordRateLimited:
                         print('[ALERTES TRAFIC] Limitation Discord : report du reste.', flush=True)
+                        conn.commit()
                         return
                     except Exception as exc:
                         print('[ALERTES TRAFIC] Erreur suppression :', repr(exc), flush=True)
