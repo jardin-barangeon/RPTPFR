@@ -105,14 +105,25 @@ def list_challenges():
     with db() as conn:
         return conn.execute('SELECT id,title,description,transport,mode,target_km,start_date,end_date,active,discord_webhook FROM challenges ORDER BY start_date DESC,id DESC').fetchall()
 def public_challenges(jobs):
-    """Résultats collectifs des challenges actuellement en cours."""
+    """Challenges visibles : à venir, en cours, ou terminés depuis 15 jours."""
     today=datetime.datetime.now(__import__('zoneinfo').ZoneInfo('Europe/Paris')).date()
     result=[]
     for c in list_challenges():
-        if not c['active'] or not (c['start_date'] <= today <= c['end_date']):
+        if not c['active']:
             continue
+        if today < c['start_date']:
+            status='upcoming'
+        elif today <= c['end_date']:
+            status='ongoing'
+        elif today <= c['end_date'] + datetime.timedelta(days=15):
+            status='finished'
+        else:
+            continue
+
+        # Les kilomètres sont arrêtés à la fin du challenge.
+        # Un challenge futur ne comptabilise encore aucune mission.
         start=c['start_date'].isoformat()
-        end=min(today,c['end_date']).isoformat()
+        end=(min(today,c['end_date']) if status != 'upcoming' else c['start_date']-datetime.timedelta(days=1)).isoformat()
         filtered=[j for j in jobs if start<=str(j.get('date') or '')[:10]<=end
                   and (c['transport']=='all' or j.get('vehicle_type')==c['transport'])]
         totals={}
@@ -125,6 +136,7 @@ def public_challenges(jobs):
         result.append({
             **{k:v for k,v in c.items() if k!='discord_webhook'},
             'start_date':start,'end_date':c['end_date'].isoformat(),
+            'status':status,
             'progress_km':round(sum(totals.values()),2),
             'leaderboard':leaderboard,'participants':len(totals),
             'missions':len(filtered)
