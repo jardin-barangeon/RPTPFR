@@ -97,7 +97,7 @@ async function loadChallenges(){
   const data=await r.json();
   if(!r.ok)throw Error(data.error||'Erreur');
   root.replaceChildren();
-  if(!data.challenges.length){section.style.display='none';return;}
+  if(!data.challenges.length){section.style.display='';root.textContent='Aucun challenge actif pour le moment.';return;}
   section.style.display='';
   for(const c of data.challenges){
    const card=document.createElement('article');

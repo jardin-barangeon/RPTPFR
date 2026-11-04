@@ -349,6 +349,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     print('[ANNONCES ACCUEIL] Discord envoyé mais enregistrement échoué :', repr(exc), flush=True)
                     return self.json_response(200,{'ok':True,'message':'Message envoyé sur Discord, mais non enregistré pour le site. Vérifie DATABASE_URL et les logs Render.'})
                 return self.json_response(200,{'ok':True,'message':'Message transmis à Discord et publié sur la page d’accueil.'})
+            match_announcement=re.fullmatch(r'/api/admin/announcements/(\d+)',path)
+            if match_announcement and method=='DELETE':
+                with challenges.db() as conn:
+                    ensure_company_announcements(conn)
+                    result=conn.execute('DELETE FROM company_announcements WHERE id=%s',(int(match_announcement.group(1)),))
+                    if result.rowcount==0:
+                        return self.json_response(404,{'error':'Annonce introuvable'})
+                return self.json_response(200,{'ok':True})
             match=re.fullmatch(r'/api/admin/challenges(?:/(\d+))?',path)
             if not match:return self.json_response(404,{'error':'Route introuvable'})
             ident=int(match.group(1)) if match.group(1) else None
@@ -368,7 +376,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             else:return self.json_response(405,{'error':'Méthode non autorisée'})
             return self.json_response(200,{'ok':True})
         except (ValueError,KeyError,TypeError,OverflowError) as e:return self.json_response(400,{'error':str(e)})
-        except Exception:return self.json_response(503,{'error':'Base de données ou configuration indisponible'})
+        except Exception as exc:
+            print('[ADMIN DB ERROR]', type(exc).__name__, str(exc)[:350], flush=True)
+            return self.json_response(503,{'error':'Base de données ou configuration indisponible (voir [ADMIN DB ERROR] dans les logs Render)'})
     def do_HEAD(self):
         if self.path.split('?')[0] in ('/', '/index.html'):
             self.send_response(200)
@@ -394,6 +404,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json_response(502, {'error':'Classement Trucky temporairement indisponible'})
         if path=='/api/world-rankings':
             return self.json_response(200,world_trucky.snapshot())
+        if path=='/api/admin/announcements':
+            if not challenges.logged_in(self):
+                return self.json_response(401,{'error':'Session administrateur nécessaire'})
+            try:
+                with challenges.db() as conn:
+                    ensure_company_announcements(conn)
+                    rows=conn.execute('SELECT id,message,created_at FROM company_announcements ORDER BY created_at DESC,id DESC LIMIT 100').fetchall()
+                return self.json_response(200,{'announcements':[{'id':r['id'],'message':r['message'],'created_at':r['created_at']} for r in rows]})
+            except Exception as exc:
+                print('[ADMIN ANNONCES DB ERROR]', type(exc).__name__, str(exc)[:350], flush=True)
+                return self.json_response(503,{'error':'Lecture des annonces impossible : vérifier PostgreSQL et les logs Render'})
         if path=='/api/company-announcements':
             try:
                 with challenges.db() as conn:
@@ -497,7 +518,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path=='/api/admin/challenges':
             if not challenges.logged_in(self):return self.json_response(401,{'error':'Connexion nécessaire'})
             try:return self.json_response(200,{'challenges':challenges.list_challenges()})
-            except Exception:return self.json_response(503,{'error':'Base de données indisponible'})
+            except Exception as exc:
+                print('[ADMIN CHALLENGES DB ERROR]',type(exc).__name__,str(exc)[:350],flush=True)
+                return self.json_response(503,{'error':'Base de données indisponible : consulter les logs Render'})
         if path=='/api/challenges':
             try:
                 token=os.environ.get('TRUCKY_TOKEN','').strip()
@@ -507,7 +530,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         CACHE['data']=fetch_all(token);CACHE['time']=time.time()
                     jobs=CACHE['data']['jobs']
                 return self.json_response(200,{'challenges':challenges.public_challenges(jobs)})
-            except Exception:return self.json_response(503,{'error':'Challenges indisponibles : vérifier la base et Trucky'})
+            except Exception as exc:
+                print('[PUBLIC CHALLENGES ERROR]',type(exc).__name__,str(exc)[:350],flush=True)
+                return self.json_response(503,{'error':'Challenges indisponibles : vérifier la base et Trucky'})
 
         if self.path=='/':
             html=(ROOT/'index.html').read_bytes()
