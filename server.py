@@ -299,9 +299,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data=challenges.read_json(self)
             if path=='/api/admin/login' and method=='POST':
                 if not challenges.password_ok(str(data.get('password',''))):return self.json_response(401,{'error':'Mot de passe incorrect'})
-                return self.json_response(200,{'ok':True},challenges.cookie_header(challenges.make_cookie()))
-            if not challenges.logged_in(self):return self.json_response(401,{'error':'Session expirée : reconnecte-toi'})
-            if path=='/api/admin/logout' and method=='POST':return self.json_response(200,{'ok':True},challenges.cookie_header('',0))
+                try:
+                    session_cookie=challenges.cookie_header(challenges.make_cookie())
+                except RuntimeError:
+                    print('[ADMIN SESSION] ADMIN_SESSION_SECRET manquant ou trop court',flush=True)
+                    return self.json_response(503,{'error':'Configuration ADMIN_SESSION_SECRET invalide sur Render (32 caractères minimum)'})
+                return self.json_response(200,{'ok':True},session_cookie)
+            if path=='/api/admin/logout' and method=='POST':
+                return self.json_response(200,{'ok':True},challenges.cookie_header('',0))
+            if not challenges.logged_in(self):
+                return self.json_response(401,{'error':'Session expirée : reconnecte-toi'})
             if path=='/api/admin/discord-daily-test' and method=='POST':
                 # Envoi manuel du vrai rapport, sans consommer l'envoi automatique de midi.
                 try:
@@ -404,6 +411,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.json_response(502, {'error':'Classement Trucky temporairement indisponible'})
         if path=='/api/world-rankings':
             return self.json_response(200,world_trucky.snapshot())
+        if path=='/api/admin/session':
+            try:
+                return self.json_response(200,{'authenticated':bool(challenges.logged_in(self))})
+            except Exception as exc:
+                print('[ADMIN SESSION] Configuration de session invalide :',type(exc).__name__,flush=True)
+                return self.json_response(503,{'error':'ADMIN_SESSION_SECRET absent ou invalide sur Render'})
         if path=='/api/admin/announcements':
             if not challenges.logged_in(self):
                 return self.json_response(401,{'error':'Session administrateur nécessaire'})
