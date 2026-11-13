@@ -1,0 +1,30 @@
+RPTPFR - INSTALLATION CLASSEMENT MINI-JEUX
+
+1) ZIP CHAOS : remplacer les fichiers du dépôt GitHub du jeu par ceux du ZIP CHAOS, en conservant le dossier static/.
+   Dans Render (service rptpfr-chaos), ajouter DATABASE_URL avec la MÊME base Neon que le site principal.
+   Le ZIP contient requirements.txt avec psycopg[binary].
+
+2) ZIP SITE PRINCIPAL : remplacer server.py, index.html, challenges.py et ajouter rptpfr_points.py.
+   Conserver les autres fichiers déjà présents sur GitHub (scs_news.py, world_trucky.py, daily_discord.py, traffic_discord.py, images, requirements.txt, etc.).
+   Vérifier que requirements.txt du site principal contient psycopg[binary]>=3.1,<4 (ou psycopg[binary] compatible).
+   Le site principal doit avoir DATABASE_URL configurée dans Render.
+
+3) Les tables rptpfr_players, rptpfr_sessions, rptpfr_games et rptpfr_rewards sont créées automatiquement au démarrage.
+   Aucune table existante de challenges ou d'annonces n'est supprimée.
+
+4) Dans CHAOS, chaque joueur doit créer un compte avec pseudo + code (6 caractères minimum), puis cocher Rester connecté.
+   Une session persistante dure 30 jours ; sans cette option, 12 heures.
+   Les cookies sont propres au domaine du jeu. La connexion ne se transfère pas automatiquement d'un domaine Render à l'autre.
+
+5) Attribution à chaque fin de partie : le gagnant sans cartes est premier, les autres sont classés selon la valeur des cartes restantes.
+   Barème multijoueur : 50 / 25 / 5. Partie avec au moins un robot : 20 / 10 / 2.
+   Seuls les humains connectés gagnent des points ; les robots n'en gagnent jamais.
+   Une partie ne peut être récompensée qu'une fois grâce à la clé unique (jeu, partie).
+
+6) TESTS : créer 2 comptes, jouer une partie et consulter l'onglet Mini-jeux du site principal.
+   Tester une partie avec robots, une autre sans robots, la reconnexion automatique et le bouton Déconnexion.
+   Les parties déjà terminées avant cette version ne peuvent pas être créditées automatiquement.
+
+SECURITE : le mot de passe DATABASE_URL partagé dans la conversation doit être renouvelé dans Neon et mis à jour sur les DEUX services Render. Ne jamais le placer dans les fichiers GitHub.
+
+IMPORTANT : modifications préparées et syntaxe Python/JavaScript vérifiée localement ; aucune connexion à votre base Neon ni déploiement Render n'a été effectué depuis cet environnement.

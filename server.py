@@ -1,5 +1,6 @@
 import json, os, urllib.request, urllib.error, urllib.parse, datetime, http.server, socketserver, time, threading
 import challenges
+import rptpfr_points
 import scs_news
 import world_trucky
 from pathlib import Path
@@ -399,6 +400,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path=self.path.split('?')[0]
+        if path=='/api/games/leaderboard':
+            try: return self.json_response(200, {'leaderboard':rptpfr_points.leaderboard()})
+            except Exception as exc:
+                print('[GAMES LEADERBOARD]',type(exc).__name__,flush=True)
+                return self.json_response(503, {'error':'Classement des mini-jeux indisponible'})
         if path=='/api/trucky/company-leaderboard':
             try:
                 query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
@@ -606,6 +612,7 @@ if __name__=='__main__':
     port=int(os.environ.get('PORT','8765'))
     host='0.0.0.0' if os.environ.get('RENDER') else '127.0.0.1'
     challenges.setup()
+    rptpfr_points.setup()
     start_daily_discord_scheduler()
     import traffic_discord
     traffic_discord.start()
