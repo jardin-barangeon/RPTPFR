@@ -216,12 +216,152 @@ def _read_one(mode):
             browser.close()
 
 
+
+# Collecte française isolée : elle ne modifie JAMAIS les deux classements mondiaux.
+FRANCE_MODES = ['France — Coach — Distance (Réel)', 'France — Camion — Distance (Réel)']
+FRANCE_STATE = {name: {'name': name, 'url': START_URL, 'top10': [],
+                      'rptpfr': None, 'loaded_rows': 0, 'verified': False}
+                for name in FRANCE_MODES}
+FRANCE_STARTED = False
+FRANCE_RUNNING = False
+FRANCE_NEXT = 0
+FRANCE_ATTEMPT = 0.0
+FRANCE_INTERVAL = max(240, int(os.environ.get('TRUCKY_FRANCE_INTERVAL', '480')))
+FRANCE_SCRAPE_LOCK = threading.Lock()
+
+
+def _select_france(page):
+    """Sélectionne France dans le champ Pays et applique Rechercher.
+
+    Si l'interface change, échoue sans afficher le classement mondial en France.
+    """
+    result = page.evaluate(r"""() => {
+      const norm = s => (s||'').replace(/\s+/g,' ').trim().toLowerCase();
+      const visible = e => !!e.getClientRects().length;
+      const labels = [...document.querySelectorAll('body *')]
+        .filter(e => e.children.length===0 && visible(e) && norm(e.textContent)==='pays');
+      for(const label of labels){
+        let p=label.parentElement;
+        for(let i=0;i<5 && p;i++,p=p.parentElement){
+          const fields=[...p.querySelectorAll('input,[role="combobox"],select')].filter(visible);
+          if(fields.length===1){
+            const field=fields[0];field.click();
+            return {ok:true};
+          }
+        }
+      }
+      return {ok:false,reason:'champ Pays introuvable'};
+    }""")
+    if not result.get('ok'):
+        raise RuntimeError(result.get('reason','Pays non sélectionnable'))
+    page.wait_for_timeout(350)
+    result = page.evaluate(r"""() => {
+      const norm=s=>(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+      const visible=e=>!!e.getClientRects().length;
+      const choices=[...document.querySelectorAll('[role="option"],li,button,[cmdk-item],select option')]
+        .filter(e=>visible(e)&&norm(e.textContent)==='france');
+      if(!choices.length)return {ok:false,reason:'option France absente'};
+      const el=choices[choices.length-1];
+      if(el.tagName==='OPTION'){
+        const select=el.closest('select');select.value=el.value;
+        select.dispatchEvent(new Event('change',{bubbles:true}));
+      }else el.click();
+      return {ok:true};
+    }""")
+    if not result.get('ok'):
+        raise RuntimeError(result.get('reason','France non sélectionnable'))
+    page.get_by_role('button',name='Rechercher',exact=True).click(timeout=5000)
+    page.wait_for_timeout(2300)
+    confirmed=page.evaluate(r"""() => {
+      const norm=s=>(s||'').replace(/\s+/g,' ').trim().toLowerCase();
+      const labels=[...document.querySelectorAll('body *')]
+        .filter(e=>e.children.length===0&&norm(e.textContent)==='pays');
+      return labels.some(label=>{
+        let p=label.parentElement;
+        for(let i=0;i<5&&p;i++,p=p.parentElement){
+          const v=p.querySelector('input,[role="combobox"],select');
+          if(v){
+            const value=(v.value||v.textContent||v.getAttribute('aria-label')||'').toLowerCase();
+            if(value.includes('france')||value==='fr')return true;
+          }
+          if(norm(p.innerText).includes('france')&&norm(p.innerText).length<150)return true;
+        }
+        return false;
+      });
+    }""")
+    if not confirmed:
+        raise RuntimeError('filtre France non confirmé après Rechercher')
+
+
+def _read_france(mode):
+    from playwright.sync_api import sync_playwright
+    with sync_playwright() as pw:
+        browser=pw.chromium.launch(headless=True,
+             args=['--no-sandbox','--disable-dev-shm-usage'])
+        try:
+            page=browser.new_page(viewport={'width':1600,'height':1100},locale='fr-FR')
+            page.set_default_timeout(5000)
+            page.goto(START_URL,wait_until='domcontentloaded',timeout=20000)
+            page.wait_for_timeout(1600)
+            _select_mode(page, 'Coach — Distance (Réel)' if 'Coach' in mode else 'Camion — Distance (Réel)')
+            _select_france(page)
+            cards=[]
+            for _ in range(8):
+                cards=page.evaluate(CARD_JS)
+                if cards:break
+                page.wait_for_timeout(700)
+            top=[c for c in cards if c.get('rank') and c['rank']<=10][:10]
+            own=next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()),None)
+            print('[TRUCKY FRANCE]',mode,'entreprises:',len(cards),'top:',len(top),flush=True)
+            return {'name':mode,'url':START_URL,'top10':top,
+                    'rptpfr':f"{own['rank']}. {own['name']} — {own['distance']}" if own else None,
+                    'loaded_rows':len(cards),'verified':bool(top)}
+        finally:
+            browser.close()
+
+
+def _france_worker():
+    global FRANCE_RUNNING, FRANCE_NEXT
+    mode=FRANCE_MODES[FRANCE_NEXT]
+    try:
+        # Priorité au mondial : le collecteur français ne se lance que lorsque
+        # les deux classements mondiaux ont déjà été obtenus.
+        with FRANCE_SCRAPE_LOCK:
+            result=_read_france(mode)
+        if result['verified']:
+            with LOCK:
+                FRANCE_STATE[mode]=result
+                _save_cache()
+        else:
+            print('[TRUCKY FRANCE]',mode,'aucun résultat, cache conservé',flush=True)
+    except Exception as exc:
+        print('[TRUCKY FRANCE]',mode,type(exc).__name__,str(exc)[:180],flush=True)
+    finally:
+        with LOCK:
+            FRANCE_NEXT=(FRANCE_NEXT+1)%len(FRANCE_MODES)
+            FRANCE_RUNNING=False
+
+
+def _france_loop():
+    global FRANCE_RUNNING, FRANCE_ATTEMPT
+    while True:
+        time.sleep(20)
+        with LOCK:
+            now=time.monotonic()
+            ready=all(cat.get('verified') for cat in STATE['categories'])
+            if not ready or RUNNING or FRANCE_RUNNING or now<FRANCE_ATTEMPT:
+                continue
+            FRANCE_RUNNING=True
+            FRANCE_ATTEMPT=now+FRANCE_INTERVAL
+        threading.Thread(target=_france_worker,daemon=True,name='trucky-france-one').start()
+
+
 def _save_cache():
     try:
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         temp = CACHE_FILE.with_suffix('.tmp')
         temp.write_text(json.dumps({'categories': STATE['categories'],
-                                    'updated_at': STATE['updated_at']}, ensure_ascii=False), encoding='utf-8')
+                                    'updated_at': STATE['updated_at'], 'france': FRANCE_STATE}, ensure_ascii=False), encoding='utf-8')
         temp.replace(CACHE_FILE)
     except OSError as exc:
         print('[TRUCKY MONDIAL] Cache local non disponible:', str(exc), flush=True)
@@ -234,6 +374,9 @@ def _restore_cache():
         for i, cat in enumerate(STATE['categories']):
             if cat['name'] in known:
                 STATE['categories'][i] = known[cat['name']]
+        for name, result in saved.get('france', {}).items():
+            if name in FRANCE_STATE and isinstance(result,dict) and result.get('verified'):
+                FRANCE_STATE[name] = result
         STATE['updated_at'] = saved.get('updated_at')
         if known:
             STATE['status'] = 'ready'
@@ -245,7 +388,8 @@ def _worker(index):
     global RUNNING
     mode = MODES[index]
     try:
-        result = _read_one(mode)
+        with FRANCE_SCRAPE_LOCK:
+            result = _read_one(mode)
         with LOCK:
             if result['verified']:
                 STATE['categories'][index] = result
@@ -280,6 +424,7 @@ def snapshot():
     with LOCK:
         if not BACKGROUND_STARTED:
             BACKGROUND_STARTED = True
+            threading.Thread(target=_france_loop, daemon=True, name='trucky-france-scheduler').start()
             threading.Thread(target=_background_loop, daemon=True,
                              name='trucky-world-scheduler').start()
         now = time.monotonic()
@@ -292,7 +437,9 @@ def snapshot():
             threading.Thread(target=_worker, args=(index,), daemon=True,
                              name='trucky-world-one').start()
         # Copie isolée pour les réponses HTTP pendant la mise à jour du cache.
-        return json.loads(json.dumps(STATE, ensure_ascii=False))
+        response = dict(STATE)
+        response['categories'] = STATE['categories'] + [FRANCE_STATE[n] for n in FRANCE_MODES]
+        return json.loads(json.dumps(response, ensure_ascii=False))
 
 
 _restore_cache()
