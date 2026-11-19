@@ -12,7 +12,7 @@ import time
 from pathlib import Path
 
 START_URL = 'https://hub.truckyapp.com/leaderboards/companies/distance'
-MODES = ['Total', 'Distance (Réel)', 'Distance (Course)', 'WOTR', 'TruckersMP', 'Transport public']
+MODES = ['Camion — Distance (Réel)', 'Coach — Distance (Réel)']
 INTERVAL = int(os.environ.get('TRUCKY_WORLD_INTERVAL', '180'))
 CACHE_FILE = Path(os.environ.get('TRUCKY_WORLD_CACHE_FILE', '/tmp/rptpfr_world_rankings.json'))
 LOCK = threading.Lock()
@@ -60,66 +60,47 @@ CARD_JS = r"""() => {
 
 
 def _select_mode(page, mode):
-    """Choisit Truck Mode dans le menu personnalisé, sans bouton Rechercher."""
-    # Les libellés sont des éléments du menu, pas nécessairement des boutons.
-    # Déterminer le déclencheur par sa proximité avec « Truck Mode ».
-    details = page.evaluate(r"""(target) => {
-      const modes = ['Total','Distance (Réel)','Distance (Course)','WOTR','TruckersMP','Transport public'];
-      const clean = x => (x || '').replace(/\s+/g,' ').trim();
+    """Choisit explicitement Truck Mode ou Coaches > Distance (Réel).
+
+    Ne considère jamais un libellé identique dans les deux groupes comme
+    une confirmation suffisante : la sélection est faite par ordre de groupe.
+    """
+    group = 'Coaches' if mode.startswith('Coach') else 'Truck Mode'
+    selected = page.evaluate(r"""(group) => {
+      const clean = s => (s || '').replace(/\s+/g, ' ').trim();
       const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
-      const leaf = [...document.querySelectorAll('body *')].filter(e => visible(e) &&
-        e.children.length === 0 && modes.includes(clean(e.textContent)));
-      const labelled = [...document.querySelectorAll('body *')].find(e => visible(e) &&
-        e.children.length === 0 && clean(e.textContent) === 'Truck Mode');
-      const choices = leaf.filter(e => {
-        const clickable = e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]');
-        return !!clickable;
-      });
-      const near = labelled && labelled.parentElement && labelled.parentElement.parentElement;
-      let trigger = near && [...near.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
-        .find(e => modes.includes(clean(e.innerText || e.textContent)));
-      if (!trigger) trigger = choices.map(e => e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]'))
-        .find(e => modes.includes(clean(e.innerText || e.textContent)) &&
-          (e.getAttribute('aria-haspopup') || e.getAttribute('role') === 'combobox'));
-      if (!trigger) trigger = choices.map(e => e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]'))[0];
-      if (!trigger) return {ok:false,reason:'Déclencheur Truck Mode introuvable'};
-      const current = clean(trigger.innerText || trigger.textContent);
-      if (current !== target) trigger.click();
-      return {ok:true,already:current === target,current};
-    }""", mode)
-    if not details.get('ok'):
-        raise RuntimeError(details.get('reason', 'Truck Mode inaccessible'))
-    if not details.get('already'):
-        page.wait_for_timeout(300)
-        selected = page.evaluate(r"""(target) => {
-          const clean = x => (x || '').replace(/\s+/g,' ').trim();
-          const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
-          const nodes = [...document.querySelectorAll('body *')].filter(e => visible(e) &&
-            e.children.length === 0 && clean(e.textContent) === target);
-          const option = nodes.map(e => e.closest('[role="option"],[role="menuitem"],li,button,a') || e)
-            .find(e => visible(e));
-          if (!option) return false;
-          option.click();
-          return true;
-        }""", mode)
-        if not selected:
-            raise RuntimeError(f'Option Truck Mode introuvable : {mode}')
-    # Attendre que le libellé du mode soit celui du sélecteur fermé. Ne pas
-    # attribuer le tableau de la catégorie précédente au nouveau mode.
-    try:
-        page.wait_for_function(r"""(target) => {
-          const clean = x => (x || '').replace(/\s+/g,' ').trim();
-          const visible = e => !!e.getClientRects().length;
-          const modes = ['Total','Distance (Réel)','Distance (Course)','WOTR','TruckersMP','Transport public'];
-          const label = [...document.querySelectorAll('body *')].find(e =>
-            visible(e) && e.children.length === 0 && clean(e.textContent) === 'Truck Mode');
-          if (!label) return false;
-          const near = label.parentElement && label.parentElement.parentElement;
-          return !!near && [...near.querySelectorAll('button,[role="button"],[role="combobox"],[aria-haspopup]')]
-            .some(e => visible(e) && clean(e.innerText || e.textContent) === target);
-        }""", mode, timeout=6000)
-    except Exception as exc:
-        raise RuntimeError(f'Sélection de {mode} non confirmée : {str(exc)[:90]}') from exc
+      const all = [...document.querySelectorAll('body *')];
+      const leaf = all.filter(e => e.children.length === 0 && visible(e));
+      const trigger = leaf.filter(e => clean(e.textContent) === 'Distance (Réel)')
+        .map(e => e.closest('button,[role="button"],[role="combobox"],[aria-haspopup]'))
+        .find(e => e && visible(e) && !e.closest('[role="listbox"],[role="menu"]'));
+      if (!trigger) return {ok:false,reason:'Sélecteur de distance introuvable'};
+      trigger.click();
+      return {ok:true};
+    }""", group)
+    if not selected.get('ok'):
+        raise RuntimeError(selected.get('reason', 'Sélecteur Trucky inaccessible'))
+    page.wait_for_timeout(350)
+    result = page.evaluate(r"""(group) => {
+      const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+      const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
+      const all = [...document.querySelectorAll('body *')];
+      const leaf = all.filter(e => e.children.length === 0 && visible(e));
+      const headings = leaf.filter(e => clean(e.textContent) === 'Truck Mode' || clean(e.textContent) === 'Coaches');
+      const options = leaf.filter(e => clean(e.textContent) === 'Distance (Réel)');
+      if (!headings.length || options.length < 2) return {ok:false,reason:'Menu Trucky Truck Mode / Coaches non reconnu'};
+      const heading = headings.find(e => clean(e.textContent) === group);
+      if (!heading) return {ok:false,reason:'Groupe '+group+' introuvable'};
+      const pos = all.indexOf(heading);
+      const next = headings.map(e => all.indexOf(e)).filter(i => i > pos).sort((a,b)=>a-b)[0] ?? Infinity;
+      const choice = options.find(e => all.indexOf(e) > pos && all.indexOf(e) < next);
+      if (!choice) return {ok:false,reason:'Distance (Réel) introuvable sous '+group};
+      const clickable = choice.closest('[role="option"],[role="menuitem"],li,button,a') || choice;
+      clickable.click();
+      return {ok:true};
+    }""", group)
+    if not result.get('ok'):
+        raise RuntimeError(result.get('reason', 'Catégorie Trucky non sélectionnée'))
     page.wait_for_timeout(1800)
 
 
