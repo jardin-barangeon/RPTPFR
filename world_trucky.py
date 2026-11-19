@@ -62,7 +62,7 @@ CARD_JS = r"""() => {
     for (let i = 0; i < 4 && visual.parentElement; i++) {
       const parent = visual.parentElement;
       const t = clean(parent.innerText);
-      const matches = t.match(/\\b[\\d\\s.,]+\\s*km\\b/gi) || [];
+      const matches = t.match(/\b[\d\s.,]+\s*km\b/gi) || [];
       if (matches.length > 1 || t.length > 350) break;
       visual = parent;
     }
@@ -79,14 +79,14 @@ CARD_JS = r"""() => {
         url = el.getAttribute('href') || el.getAttribute('xlink:href') || '';
       if (!url) {
         const bg = getComputedStyle(el).backgroundImage;
-        const m = bg && bg.match(/url\\(["']?(.+?)["']?\\)/);
+        const m = bg && bg.match(/url\(["']?(.+?)["']?\)/);
         if (m) url = m[1];
       }
       url = absolute(url);
       if (url && !imgs.some(x => x.src === url))
         imgs.push({src:url, alt:(el.getAttribute('alt') || el.getAttribute('title') || el.getAttribute('class') || '').toString()});
     }
-    const isFlag = x => /flag|country|\\/flags?\\/|flagcdn|\\/w20\\/|\\/w40\\//i.test(x.src+' '+x.alt) ||
+    const isFlag = x => /flag|country|\/flags?\/|flagcdn|\/w20\/|\/w40\//i.test(x.src+' '+x.alt) ||
       /^(?:[a-z]{2}|[a-z]{2}-[a-z]{2})$/i.test(x.alt.trim());
     const flag = imgs.find(isFlag);
     const logo = imgs.find(i => i !== flag && !/avatar-default|placeholder/i.test(i.src));
@@ -196,7 +196,7 @@ def _read_one(mode):
                       'aucune carte détectée ; URL:', page.url,
                       'titre:', page.title(), flush=True)
             # Complète uniquement les images manquantes, jamais les classements.
-            directory = _image_directory()
+            directory = {}  # Images facultatives : ne pas bloquer le classement.
             for c in cards:
                 metadata = directory.get(_name_key(c['name']), {})
                 for field in ('logo_url', 'flag_url'):
