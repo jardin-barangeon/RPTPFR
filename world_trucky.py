@@ -324,8 +324,7 @@ def _france_worker():
     global FRANCE_RUNNING, FRANCE_NEXT
     mode=FRANCE_MODES[FRANCE_NEXT]
     try:
-        # Priorité au mondial : le collecteur français ne se lance que lorsque
-        # les deux classements mondiaux ont déjà été obtenus.
+        # Collecte France autonome, sans modifier les données mondiales.
         with FRANCE_SCRAPE_LOCK:
             result=_read_france(mode)
         if result['verified']:
@@ -348,8 +347,9 @@ def _france_loop():
         time.sleep(20)
         with LOCK:
             now=time.monotonic()
-            ready=all(cat.get('verified') for cat in STATE['categories'])
-            if not ready or RUNNING or FRANCE_RUNNING or now<FRANCE_ATTEMPT:
+            # La collecte France est indépendante de la réussite des classements mondiaux.
+            # Le verrou FRANCE_SCRAPE_LOCK évite toujours deux Chromium simultanés.
+            if RUNNING or FRANCE_RUNNING or now<FRANCE_ATTEMPT:
                 continue
             FRANCE_RUNNING=True
             FRANCE_ATTEMPT=now+FRANCE_INTERVAL
