@@ -174,47 +174,66 @@ def _image_directory():
     return result
 
 
-def _read_one(mode):
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=True,
-                                     args=['--no-sandbox', '--disable-dev-shm-usage'])
+def _read_api(mode, france=False):
+    """Classements officiels Trucky, sans navigateur ni sélection de menus."""
+    category = 'coaches_real_miles' if 'Coach' in mode else 'real_miles'
+    now = dt.datetime.now(dt.timezone.utc)
+    params = urllib.parse.urlencode({
+        'country_code': 'FR' if france else '',
+        'game': 1, 'stats_type': category,
+        'month': now.month, 'year': now.year,
+        'page': 1, 'perPage': 18,
+    })
+    url = 'https://e.truckyapp.com/api/v1/companies/leaderboards?' + params
+    request = urllib.request.Request(url, headers={
+        'Accept': 'application/json',
+        'User-Agent': 'Mozilla/5.0 RPTPFR/1.0',
+        'Origin': 'https://hub.truckyapp.com',
+    })
+    with urllib.request.urlopen(request, timeout=18) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+        raise ValueError('Format JSON Trucky inattendu (data manquant)')
+    cards = []
+    for item in payload['data']:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get('name') or '').strip()
+        if not name:
+            continue
         try:
-            page = browser.new_page(viewport={'width': 1600, 'height': 1100}, locale='fr-FR')
-            page.set_default_timeout(5000)
-            page.goto(START_URL, wait_until='domcontentloaded', timeout=20000)
-            page.wait_for_timeout(1600)
-            _select_mode(page, mode)
-            cards = []
-            for _ in range(8):
-                cards = page.evaluate(CARD_JS)
-                if cards:
-                    break
-                page.wait_for_timeout(700)
-            if not cards:
-                print('[TRUCKY MONDIAL]', mode,
-                      'aucune carte détectée ; URL:', page.url,
-                      'titre:', page.title(), flush=True)
-            # Complète uniquement les images manquantes, jamais les classements.
-            directory = {}  # Images facultatives : ne pas bloquer le classement.
-            for c in cards:
-                metadata = directory.get(_name_key(c['name']), {})
-                for field in ('logo_url', 'flag_url'):
-                    if not c.get(field) and metadata.get(field):
-                        c[field] = metadata[field]
-            top = [c for c in cards if c['rank'] <= 10][:10]
-            print('[TRUCKY MONDIAL] Images', mode,
-                  'logos:', sum(bool(c.get('logo_url')) for c in top),
-                  'drapeaux:', sum(bool(c.get('flag_url')) for c in top),
-                  'sur', len(top), flush=True)
-            own = next((c for c in cards if 'RPTPFR' in c['name'].upper()
-                        or 'ЯPTPFR' in c['name'].upper()), None)
-            return {'name': mode, 'url': START_URL, 'top10': top,
-                    'rptpfr': f"{own['rank']}. {own['name']} — {own['distance']}" if own else None,
-                    'loaded_rows': len(cards), 'verified': bool(top)}
-        finally:
-            browser.close()
+            rank = int(item.get('position') or 0)
+        except (ValueError, TypeError):
+            continue
+        if rank < 1:
+            continue
+        try:
+            km = float(item.get('driven_distance') or 0)
+        except (ValueError, TypeError):
+            continue
+        distance = f"{km:,.0f}".replace(',', ' ') + ' ' + str(item.get('distance_unit') or 'km')
+        logo = item.get('avatar_url') or item.get('logo_url')
+        flag = item.get('flag_url')
+        cards.append({
+            'rank': rank, 'name': name[:140], 'distance': distance,
+            'logo_url': logo if isinstance(logo, str) and logo.startswith('https://') else None,
+            'flag_url': flag if isinstance(flag, str) and flag.startswith('https://') else None,
+            'company_id': item.get('company_id') or item.get('id'),
+        })
+    cards.sort(key=lambda x: x['rank'])
+    top = cards[:10]
+    own = next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()), None)
+    print('[TRUCKY FRANCE]' if france else '[TRUCKY MONDIAL]',
+          mode, 'API', category, 'lignes', len(cards), 'top', len(top), flush=True)
+    return {
+        'name': mode, 'url': START_URL, 'top10': top,
+        'rptpfr': f"{own['rank']}. {own['name']} — {own['distance']}" if own else None,
+        'loaded_rows': len(cards), 'verified': bool(top),
+    }
 
+
+def _read_one(mode):
+    return _read_api(mode, france=False)
 
 
 # Collecte française isolée : elle ne modifie JAMAIS les deux classements mondiaux.
@@ -294,30 +313,7 @@ def _select_france(page):
 
 
 def _read_france(mode):
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as pw:
-        browser=pw.chromium.launch(headless=True,
-             args=['--no-sandbox','--disable-dev-shm-usage'])
-        try:
-            page=browser.new_page(viewport={'width':1600,'height':1100},locale='fr-FR')
-            page.set_default_timeout(5000)
-            page.goto(START_URL,wait_until='domcontentloaded',timeout=20000)
-            page.wait_for_timeout(1600)
-            _select_mode(page, 'Coach — Distance (Réel)' if 'Coach' in mode else 'Camion — Distance (Réel)')
-            _select_france(page)
-            cards=[]
-            for _ in range(8):
-                cards=page.evaluate(CARD_JS)
-                if cards:break
-                page.wait_for_timeout(700)
-            top=[c for c in cards if c.get('rank') and c['rank']<=10][:10]
-            own=next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()),None)
-            print('[TRUCKY FRANCE]',mode,'entreprises:',len(cards),'top:',len(top),flush=True)
-            return {'name':mode,'url':START_URL,'top10':top,
-                    'rptpfr':f"{own['rank']}. {own['name']} — {own['distance']}" if own else None,
-                    'loaded_rows':len(cards),'verified':bool(top)}
-        finally:
-            browser.close()
+    return _read_api(mode, france=True)
 
 
 def _france_worker():
@@ -344,7 +340,7 @@ def _france_worker():
 def _france_loop():
     global FRANCE_RUNNING, FRANCE_ATTEMPT
     while True:
-        time.sleep(20)
+        time.sleep(5)
         with LOCK:
             now=time.monotonic()
             # La collecte France est indépendante de la réussite des classements mondiaux.
