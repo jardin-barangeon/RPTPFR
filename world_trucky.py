@@ -8,7 +8,6 @@ import json
 import os
 import re
 import urllib.request
-import urllib.error
 import urllib.parse
 import unicodedata
 import threading
@@ -188,46 +187,33 @@ def _read_api(mode, france=False):
     url = 'https://e.truckyapp.com/api/v1/companies/leaderboards?' + params
     request = urllib.request.Request(url, headers={
         'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'User-Agent': 'Mozilla/5.0 RPTPFR/1.0',
         'Origin': 'https://hub.truckyapp.com',
-        'Referer': 'https://hub.truckyapp.com/',
-        'Accept-Language': 'fr-FR,fr;q=0.9,en;q=0.8',
     })
-    try:
-        with urllib.request.urlopen(request, timeout=22) as response:
-            payload = json.load(response)
-    except urllib.error.HTTPError as exc:
-        print('[TRUCKY FRANCE]' if france else '[TRUCKY MONDIAL]',
-              mode, 'HTTP', exc.code, 'Retry-After', exc.headers.get('Retry-After'), flush=True)
-        raise
-    # Les versions de l'API peuvent exposer les lignes sous data ou data.data.
-    rows = payload.get('data') if isinstance(payload, dict) else None
-    if isinstance(rows, dict):
-        rows = rows.get('data') or rows.get('items') or rows.get('results')
-    if not isinstance(rows, list):
-        keys = list(payload)[:12] if isinstance(payload, dict) else type(payload).__name__
-        raise ValueError(f'Format JSON Trucky inattendu : {keys}')
+    with urllib.request.urlopen(request, timeout=18) as response:
+        payload = json.load(response)
+    if not isinstance(payload, dict) or not isinstance(payload.get('data'), list):
+        raise ValueError('Format JSON Trucky inattendu (data manquant)')
     cards = []
-    for item in rows:
+    for item in payload['data']:
         if not isinstance(item, dict):
             continue
-        company = item.get('company') if isinstance(item.get('company'), dict) else {}
-        name = str(item.get('name') or company.get('name') or '').strip()
+        name = str(item.get('name') or '').strip()
         if not name:
             continue
         try:
-            rank = int(item.get('position') or item.get('rank') or 0)
+            rank = int(item.get('position') or 0)
         except (ValueError, TypeError):
             continue
         if rank < 1:
             continue
         try:
-            km = float(item.get('driven_distance') or item.get('distance') or item.get('value') or 0)
+            km = float(item.get('driven_distance') or 0)
         except (ValueError, TypeError):
             continue
         distance = f"{km:,.0f}".replace(',', ' ') + ' ' + str(item.get('distance_unit') or 'km')
-        logo = item.get('avatar_url') or item.get('logo_url') or company.get('avatar_url') or company.get('logo_url')
-        flag = item.get('flag_url') or company.get('flag_url')
+        logo = item.get('avatar_url') or item.get('logo_url')
+        flag = item.get('flag_url')
         cards.append({
             'rank': rank, 'name': name[:140], 'distance': distance,
             'logo_url': logo if isinstance(logo, str) and logo.startswith('https://') else None,
@@ -236,14 +222,9 @@ def _read_api(mode, france=False):
         })
     cards.sort(key=lambda x: x['rank'])
     top = cards[:10]
-    if france:
-        # L'API filtre les entreprises mais peut conserver les rangs mondiaux.
-        # Afficher les rangs du Top France sans modifier les distances.
-        top = [{**row, 'rank': i} for i, row in enumerate(top, start=1)]
     own = next((c for c in cards if 'RPTPFR' in c['name'].upper() or 'ЯPTPFR' in c['name'].upper()), None)
     print('[TRUCKY FRANCE]' if france else '[TRUCKY MONDIAL]',
-          mode, 'API', category, 'lignes', len(cards), 'top', len(top),
-          'exemple_champs', list(rows[0].keys())[:15] if rows and isinstance(rows[0], dict) else [], flush=True)
+          mode, 'API', category, 'lignes', len(cards), 'top', len(top), flush=True)
     return {
         'name': mode, 'url': START_URL, 'top10': top,
         'rptpfr': f"{own['rank']}. {own['name']} — {own['distance']}" if own else None,
@@ -264,7 +245,7 @@ FRANCE_STARTED = False
 FRANCE_RUNNING = False
 FRANCE_NEXT = 0
 FRANCE_ATTEMPT = 0.0
-FRANCE_INTERVAL = max(120, int(os.environ.get('TRUCKY_FRANCE_INTERVAL', '480')))
+FRANCE_INTERVAL = max(240, int(os.environ.get('TRUCKY_FRANCE_INTERVAL', '480')))
 FRANCE_SCRAPE_LOCK = threading.Lock()
 
 
@@ -364,7 +345,7 @@ def _france_loop():
             now=time.monotonic()
             # La collecte France est indépendante de la réussite des classements mondiaux.
             # Le verrou FRANCE_SCRAPE_LOCK évite toujours deux Chromium simultanés.
-            if FRANCE_RUNNING or now<FRANCE_ATTEMPT:
+            if RUNNING or FRANCE_RUNNING or now<FRANCE_ATTEMPT:
                 continue
             FRANCE_RUNNING=True
             FRANCE_ATTEMPT=now+FRANCE_INTERVAL
