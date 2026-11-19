@@ -53,7 +53,14 @@ CARD_JS = r"""() => {
     const key = `${rank}|${name}|${km[1]}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    result.push({rank, name, distance: clean(km[0]), text});
+    const imgs = [...chosen.querySelectorAll('img')].map(img => ({
+      src: img.currentSrc || img.src || '', alt: img.alt || '',
+      width: img.naturalWidth || 0, height: img.naturalHeight || 0
+    })).filter(i => /^https?:\/\//.test(i.src));
+    const flag = imgs.find(i => /flag|country|\/flags?\/|flagcdn/i.test(i.src + ' ' + i.alt) || /^[a-z]{2}$/i.test(i.alt));
+    const logo = imgs.find(i => i !== flag && !/avatar-default|placeholder/i.test(i.src));
+    result.push({rank, name, distance: clean(km[0]), text,
+      logo_url: logo ? logo.src : null, flag_url: flag ? flag.src : null});
   }
   return result.sort((a,b) => a.rank - b.rank);
 }"""
@@ -87,7 +94,7 @@ def _select_mode(page, mode):
       const all = [...document.querySelectorAll('body *')];
       const leaf = all.filter(e => e.children.length === 0 && visible(e));
       const headings = leaf.filter(e => clean(e.textContent) === 'Truck Mode' || clean(e.textContent) === 'Coaches');
-      const options = leaf.filter(e => clean(e.textContent) === 'Distance (Réel)');
+      const options = leaf.filter(e => clean(e.textContent) === 'Distance (Réel)' && e.closest('[role=option],[role=menuitem],[role=listbox],[role=menu],li'));
       if (!headings.length || options.length < 2) return {ok:false,reason:'Menu Trucky Truck Mode / Coaches non reconnu'};
       const heading = headings.find(e => clean(e.textContent) === group);
       if (!heading) return {ok:false,reason:'Groupe '+group+' introuvable'};
@@ -126,7 +133,7 @@ def _read_one(mode):
                       'aucune carte détectée ; URL:', page.url,
                       'titre:', page.title(), flush=True)
             # Le rang est déjà fourni par le HTML de la page d'accueil.
-            top = [f"{c['name']} — {c['distance']}" for c in cards if c['rank'] <= 10][:10]
+            top = [c for c in cards if c['rank'] <= 10][:10]
             own = next((c for c in cards if 'RPTPFR' in c['name'].upper()
                         or 'ЯPTPFR' in c['name'].upper()), None)
             return {'name': mode, 'url': START_URL, 'top10': top,

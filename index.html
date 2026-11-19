@@ -241,15 +241,26 @@ async function loadWorld(force=false){
    ready++;
    status.textContent='Classement réel confirmé • '+category.loaded_rows+' entrées détectées';
    const table=document.createElement('table');table.className='world-table';
-   const head=document.createElement('thead');head.innerHTML='<tr><th>Rang</th><th>Entreprise et distance</th></tr>';
+   const head=document.createElement('thead');head.innerHTML='<tr><th>Rang</th><th>Entreprise</th><th class="right">KM</th></tr>';
    const body=document.createElement('tbody');
    for(let i=0;i<category.top10.length;i++){
-    const entry=String(category.top10[i]);
+    const raw=category.top10[i];
+    const item=(raw && typeof raw==='object')?raw:{name:String(raw).split(' — ')[0],distance:String(raw).split(' — ').slice(1).join(' — '),rank:i+1};
     const tr=document.createElement('tr');
-    if(/(?:Я|R)PTPFR/i.test(entry))tr.className='world-ours';
-    const rank=document.createElement('td');rank.textContent='#'+(i+1);
-    const company=document.createElement('td');company.textContent=entry;
-    tr.append(rank,company);body.append(tr);
+    if(/(?:Я|R)PTPFR/i.test(item.name||''))tr.className='world-ours';
+    const rank=document.createElement('td');rank.textContent='#'+(item.rank||i+1);
+    const company=document.createElement('td');
+    const wrap=document.createElement('div');wrap.className='world-company';
+    function addImage(url,alt){
+      if(typeof url!=='string'||!/^https:\/\//i.test(url))return;
+      const img=document.createElement('img');img.src=url;img.alt=alt;img.loading='lazy';
+      img.referrerPolicy='no-referrer';img.onerror=()=>img.remove();wrap.append(img);
+    }
+    addImage(item.logo_url,'Logo entreprise');
+    const name=document.createElement('span');name.textContent=item.name||'Entreprise';wrap.append(name);
+    addImage(item.flag_url,'Drapeau');company.append(wrap);
+    const distance=document.createElement('td');distance.className='right';distance.textContent=item.distance||'—';
+    tr.append(rank,company,distance);body.append(tr);
    }
    table.append(head,body);root.append(table);
    const note=document.createElement('p');note.className='world-company-note';
