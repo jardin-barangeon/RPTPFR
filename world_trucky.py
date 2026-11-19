@@ -7,6 +7,9 @@ import datetime as dt
 import json
 import os
 import re
+import urllib.request
+import urllib.parse
+import unicodedata
 import threading
 import time
 from pathlib import Path
@@ -53,11 +56,39 @@ CARD_JS = r"""() => {
     const key = `${rank}|${name}|${km[1]}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    const imgs = [...chosen.querySelectorAll('img')].map(img => ({
-      src: img.currentSrc || img.src || '', alt: img.alt || '',
-      width: img.naturalWidth || 0, height: img.naturalHeight || 0
-    })).filter(i => /^https?:\/\//.test(i.src));
-    const flag = imgs.find(i => /flag|country|\/flags?\/|flagcdn/i.test(i.src + ' ' + i.alt) || /^[a-z]{2}$/i.test(i.alt));
+    // Chercher le conteneur visuel complet de cette entreprise, sans
+    // remonter jusqu'au tableau qui contient plusieurs entreprises.
+    let visual = chosen;
+    for (let i = 0; i < 4 && visual.parentElement; i++) {
+      const parent = visual.parentElement;
+      const t = clean(parent.innerText);
+      const matches = t.match(/\\b[\\d\\s.,]+\\s*km\\b/gi) || [];
+      if (matches.length > 1 || t.length > 350) break;
+      visual = parent;
+    }
+    const imgs = [];
+    const absolute = url => {
+      try { const u = new URL(url, document.baseURI); return u.protocol === 'https:' ? u.href : null; }
+      catch (_) { return null; }
+    };
+    for (const el of [visual, ...visual.querySelectorAll('img,[style],svg image')]) {
+      let url = '';
+      if (el.tagName === 'IMG') url = el.currentSrc || el.getAttribute('src') ||
+        el.getAttribute('data-src') || el.getAttribute('data-original') || '';
+      else if (el.tagName.toLowerCase() === 'image')
+        url = el.getAttribute('href') || el.getAttribute('xlink:href') || '';
+      if (!url) {
+        const bg = getComputedStyle(el).backgroundImage;
+        const m = bg && bg.match(/url\\(["']?(.+?)["']?\\)/);
+        if (m) url = m[1];
+      }
+      url = absolute(url);
+      if (url && !imgs.some(x => x.src === url))
+        imgs.push({src:url, alt:(el.getAttribute('alt') || el.getAttribute('title') || el.getAttribute('class') || '').toString()});
+    }
+    const isFlag = x => /flag|country|\\/flags?\\/|flagcdn|\\/w20\\/|\\/w40\\//i.test(x.src+' '+x.alt) ||
+      /^(?:[a-z]{2}|[a-z]{2}-[a-z]{2})$/i.test(x.alt.trim());
+    const flag = imgs.find(isFlag);
     const logo = imgs.find(i => i !== flag && !/avatar-default|placeholder/i.test(i.src));
     result.push({rank, name, distance: clean(km[0]), text,
       logo_url: logo ? logo.src : null, flag_url: flag ? flag.src : null});
@@ -111,6 +142,38 @@ def _select_mode(page, mode):
     page.wait_for_timeout(1800)
 
 
+def _name_key(name):
+    plain = unicodedata.normalize('NFKD', str(name or '').casefold())
+    return ''.join(c for c in plain if c.isalnum() and not unicodedata.combining(c))
+
+
+def _image_directory():
+    """Optional image metadata only; never use API distances to replace Coach results."""
+    result = {}
+    for category in ('real_miles', 'transport_system'):
+        try:
+            query = urllib.parse.urlencode({
+                'country_code': '', 'game': 1, 'stats_type': category,
+                'month': dt.datetime.now(dt.timezone.utc).month,
+                'year': dt.datetime.now(dt.timezone.utc).year,
+                'page': 1, 'perPage': 100})
+            req = urllib.request.Request(
+                'https://e.truckyapp.com/api/v1/companies/leaderboards?' + query,
+                headers={'Accept':'application/json','User-Agent':'RPTPFR-World/1.0'})
+            with urllib.request.urlopen(req, timeout=12) as response:
+                payload = json.load(response)
+            for item in payload.get('data', []):
+                if not isinstance(item, dict): continue
+                key = _name_key(item.get('name'))
+                if not key: continue
+                result[key] = {
+                    'logo_url': item.get('avatar_url') or item.get('logo_url'),
+                    'flag_url': item.get('flag_url')}
+        except Exception as exc:
+            print('[TRUCKY MONDIAL] Images API', category, type(exc).__name__, flush=True)
+    return result
+
+
 def _read_one(mode):
     from playwright.sync_api import sync_playwright
     with sync_playwright() as pw:
@@ -132,8 +195,18 @@ def _read_one(mode):
                 print('[TRUCKY MONDIAL]', mode,
                       'aucune carte détectée ; URL:', page.url,
                       'titre:', page.title(), flush=True)
-            # Le rang est déjà fourni par le HTML de la page d'accueil.
+            # Complète uniquement les images manquantes, jamais les classements.
+            directory = _image_directory()
+            for c in cards:
+                metadata = directory.get(_name_key(c['name']), {})
+                for field in ('logo_url', 'flag_url'):
+                    if not c.get(field) and metadata.get(field):
+                        c[field] = metadata[field]
             top = [c for c in cards if c['rank'] <= 10][:10]
+            print('[TRUCKY MONDIAL] Images', mode,
+                  'logos:', sum(bool(c.get('logo_url')) for c in top),
+                  'drapeaux:', sum(bool(c.get('flag_url')) for c in top),
+                  'sur', len(top), flush=True)
             own = next((c for c in cards if 'RPTPFR' in c['name'].upper()
                         or 'ЯPTPFR' in c['name'].upper()), None)
             return {'name': mode, 'url': START_URL, 'top10': top,
