@@ -15,8 +15,7 @@ import time
 from pathlib import Path
 
 START_URL = 'https://hub.truckyapp.com/leaderboards/companies/distance'
-MODES = ['Camion — Distance (Réel)', 'Coach — Distance (Réel)',
-         'France — Camion — Distance (Réel)', 'France — Coach — Distance (Réel)']
+MODES = ['Camion — Distance (Réel)', 'Coach — Distance (Réel)']
 INTERVAL = int(os.environ.get('TRUCKY_WORLD_INTERVAL', '180'))
 CACHE_FILE = Path(os.environ.get('TRUCKY_WORLD_CACHE_FILE', '/tmp/rptpfr_world_rankings.json'))
 LOCK = threading.Lock()
@@ -104,7 +103,7 @@ def _select_mode(page, mode):
     Ne considère jamais un libellé identique dans les deux groupes comme
     une confirmation suffisante : la sélection est faite par ordre de groupe.
     """
-    group = 'Coaches' if 'Coach' in mode else 'Truck Mode'
+    group = 'Coaches' if mode.startswith('Coach') else 'Truck Mode'
     selected = page.evaluate(r"""(group) => {
       const clean = s => (s || '').replace(/\s+/g, ' ').trim();
       const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
@@ -141,68 +140,6 @@ def _select_mode(page, mode):
     if not result.get('ok'):
         raise RuntimeError(result.get('reason', 'Catégorie Trucky non sélectionnée'))
     page.wait_for_timeout(1800)
-
-
-def _select_france(page):
-    """Applique le filtre France dans l'interface Trucky, sans filtrer un top mondial."""
-    # Le champ Pays est un combobox (bibliothèque UI variable suivant Trucky).
-    # On identifie le champ par son libellé pour ne pas toucher au sélecteur de mode.
-    country = page.get_by_text('Pays', exact=True).first
-    country.wait_for(state='visible', timeout=7000)
-    result = page.evaluate(r"""() => {
-      const clean = s => (s || '').replace(/\s+/g, ' ').trim();
-      const label = [...document.querySelectorAll('label,span,div,p')]
-        .find(e => e.children.length === 0 && clean(e.textContent).toLowerCase() === 'pays');
-      if (!label) return {ok:false, reason:'Libellé Pays absent'};
-      let field = label.parentElement;
-      for(let i=0;i<4 && field;i++,field=field.parentElement){
-        const candidates = [...field.querySelectorAll('input,[role="combobox"],select')];
-        if(candidates.length===1){
-          const target=candidates[0];
-          target.click();
-          return {ok:true};
-        }
-      }
-      return {ok:false,reason:'Champ Pays introuvable'};
-    }""")
-    if not result.get('ok'):
-        raise RuntimeError(result.get('reason', 'Filtre Pays inaccessible'))
-    page.wait_for_timeout(350)
-    # Le filtre peut être un select HTML ou un menu personnalisable.
-    selected = page.evaluate(r"""() => {
-      const clean = s => (s || '').replace(/\s+/g,' ').trim();
-      const visible = e => !!e.getClientRects().length && getComputedStyle(e).visibility !== 'hidden';
-      const options=[...document.querySelectorAll('[role="option"],li,button,[cmdk-item],select option')]
-        .filter(e=>visible(e) && clean(e.textContent).toLowerCase()==='france');
-      if(!options.length) return {ok:false,reason:'Option France absente'};
-      const option=options[options.length-1];
-      if(option.tagName==='OPTION'){
-        const select=option.closest('select');select.value=option.value;
-        select.dispatchEvent(new Event('change',{bubbles:true}));
-      }else (option.closest('[role="option"],li,button,[cmdk-item]')||option).click();
-      return {ok:true};
-    }""")
-    if not selected.get('ok'):
-        raise RuntimeError(selected.get('reason','France non sélectionnable'))
-    page.wait_for_timeout(350)
-    search=page.get_by_role('button', name='Rechercher', exact=True)
-    search.click(timeout=5000)
-    page.wait_for_timeout(2000)
-    # Éviter de présenter les résultats mondiaux comme français si le filtre échoue.
-    check = page.evaluate(r"""() => {
-      const clean = s => (s || '').replace(/\s+/g,' ').trim();
-      const label=[...document.querySelectorAll('label,span,div,p')]
-        .find(e=>e.children.length===0 && clean(e.textContent).toLowerCase()==='pays');
-      if(!label)return false;
-      let node=label.parentElement;
-      for(let i=0;i<4 && node;i++,node=node.parentElement){
-        const text=clean(node.innerText);
-        if(/\bFrance\b/i.test(text) && text.length<130)return true;
-      }
-      return false;
-    }""")
-    if not check:
-        raise RuntimeError('Impossible de confirmer le filtre France sur Trucky')
 
 
 def _name_key(name):
@@ -248,8 +185,6 @@ def _read_one(mode):
             page.goto(START_URL, wait_until='domcontentloaded', timeout=20000)
             page.wait_for_timeout(1600)
             _select_mode(page, mode)
-            if mode.startswith('France'):
-                _select_france(page)
             cards = []
             for _ in range(8):
                 cards = page.evaluate(CARD_JS)
@@ -267,7 +202,6 @@ def _read_one(mode):
                 for field in ('logo_url', 'flag_url'):
                     if not c.get(field) and metadata.get(field):
                         c[field] = metadata[field]
-            # Le rang est celui de la recherche filtrée France ou du mondial.
             top = [c for c in cards if c['rank'] <= 10][:10]
             print('[TRUCKY MONDIAL] Images', mode,
                   'logos:', sum(bool(c.get('logo_url')) for c in top),
@@ -352,8 +286,7 @@ def snapshot():
         if not RUNNING and now >= NEXT_ATTEMPT:
             index = NEXT_INDEX
             NEXT_INDEX = (NEXT_INDEX + 1) % len(MODES)
-            # Quatre catégories au lieu de deux : un seul Chromium à la fois.
-            NEXT_ATTEMPT = now + max(90, INTERVAL // 2)
+            NEXT_ATTEMPT = now + max(90, INTERVAL)
             RUNNING = True
             STATE['status'] = 'loading' if not any(c['verified'] for c in STATE['categories']) else 'ready'
             threading.Thread(target=_worker, args=(index,), daemon=True,
